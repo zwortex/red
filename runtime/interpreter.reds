@@ -681,7 +681,7 @@ interpreter: context [
 	][
 		name: as red-word! either null? slot [pc - 1][slot]
 		if TYPE_OF(name) <> TYPE_WORD [name: words/_anon]
-		saved: stack/push value							;-- prevent word's value slot to be corrupted #2199
+		saved: stack/push value							;-- prevent word's value slot from being corrupted #2199
 		
 		switch TYPE_OF(value) [
 			TYPE_ACTION 

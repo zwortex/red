@@ -2492,6 +2492,40 @@ natives: context [
 		
 		ext-process/call cmd wait > -1 show > -1 console > -1 shell > -1 in out err
 	]
+	
+	apply*: func [
+		check?	[logic!]
+		only	[integer!]
+		/local
+			fun	 [red-function!]
+			args [red-block!]
+			s	 [series!]
+	][	
+		#typecheck [apply only]
+		
+		fun: as red-function! stack/arguments
+		args: as red-block! fun + 1
+		s: GET_BUFFER(args)
+		
+		either TYPE_OF(fun) = TYPE_OP [
+			interpreter/eval-infix fun s/offset + args/head - 1 s/tail no
+		][
+			interpreter/eval-code fun s/offset + args/head s/tail no null null null
+		]
+		
+		; TBD: open stack frame
+		;spec: as series! fun/spec/value
+		;value: spec/offset + spec/head
+		;tail:  spec/tail
+		
+		;while [value < tail][
+			; TBD: fill stack frame
+		;	value: value + 1
+		;]
+		; TBD: call function
+		; TBD: close stack frame
+		
+	]
 
 	;--- Natives helper functions ---
 	
@@ -3098,6 +3132,7 @@ natives: context [
 			:call*
 			:zero?*
 			:size?*
+			:apply*
 		]
 	]
 
