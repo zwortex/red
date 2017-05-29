@@ -2497,31 +2497,61 @@ natives: context [
 		check?	[logic!]
 		only	[integer!]
 		/local
-			fun	 [red-function!]
-			args [red-block!]
-			s	 [series!]
+			fun	  [red-function!]
+			args  [red-block!]
+			pc	  [red-value!]
+			end	  [red-value!]
+			value [red-value!]
+			tail  [red-value!]
+			bool  [red-logic!]
+			type  [integer!]
+			spec  [series!]
+			s	  [series!]
 	][	
 		#typecheck [apply only]
 		
 		fun: as red-function! stack/arguments
 		args: as red-block! fun + 1
 		s: GET_BUFFER(args)
-		
-		either TYPE_OF(fun) = TYPE_OP [
-			interpreter/eval-infix fun s/offset + args/head - 1 s/tail no
-		][
-			interpreter/eval-code fun s/offset + args/head s/tail no null null null
-		]
+		pc:  s/offset + args/head
+		end: s/tail
 		
 		; TBD: open stack frame
-		;spec: as series! fun/spec/value
-		;value: spec/offset + spec/head
-		;tail:  spec/tail
+		spec: as series! fun/spec/value
+		value: spec/offset
+		tail:  spec/tail
 		
-		;while [value < tail][
+		while [value < tail][
 			; TBD: fill stack frame
-		;	value: value + 1
-		;]
+			switch TYPE_OF(value) [
+				TYPE_WORD
+				TYPE_LIT_WORD
+				TYPE_GET_WORD [
+					either pc >= end [none/push][
+						pc: interpreter/eval-expression pc end yes no no
+					]
+				]
+				TYPE_REFINEMENT [
+					; TBD: check for /local
+					either pc >= end [stack/push as red-value! false-value][
+						type: TYPE_OF(pc)
+						bool: as red-logic! pc
+						either any [
+							type = TYPE_NONE
+							all [type = TYPE_LOGIC not bool/value]
+						][
+							stack/push as red-value! false-value
+						][
+							stack/push as red-value! true-value
+						]
+						pc: pc + 1
+					]
+				]
+				default [0]
+			]
+			
+			value: value + 1
+		]
 		; TBD: call function
 		; TBD: close stack frame
 		
