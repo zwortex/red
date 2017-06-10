@@ -101,6 +101,7 @@ red: context [
 	#include %datatypes/tag.reds
 	#include %datatypes/email.reds
 	#include %datatypes/handle.reds
+	#include %datatypes/struct.reds
 	#if OS = 'Windows [#include %datatypes/image.reds]	;-- temporary
 	#if OS = 'MacOSX  [#include %datatypes/image.reds]	;-- temporary
 
@@ -184,6 +185,7 @@ red: context [
 		tag/init
 		email/init
 		handle/init
+		_struct/init
 		#if OS = 'Windows [image/init]					;-- temporary
 		#if OS = 'MacOSX [image/init]					;-- temporary
 		

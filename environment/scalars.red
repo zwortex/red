@@ -46,5 +46,5 @@ any-object!:	make typeset! [object! error!]
 any-string!:	make typeset! [string! file! url! tag! email!]
 series!:		union make typeset! [binary! image! vector!] union any-block! any-string!
 immediate!:		union scalar! union all-word! make typeset! [none! logic! datatype! typeset! handle!]
-default!:		union series! union immediate! union any-object! union external! union any-function! make typeset! [map! bitset!]
+default!:		union series! union immediate! union any-object! union external! union any-function! make typeset! [map! bitset! struct!]
 any-type!:		union default! internal!

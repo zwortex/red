@@ -330,3 +330,10 @@ red-handle!: alias struct! [
 	value	[integer!]								;-- 32-bit signed integer value
 	_pad	[integer!]	
 ]
+
+red-struct!: alias struct! [
+	header 	[integer!]								;-- cell header
+	symbols	[node!]									;-- list of struct members (sym, type, offset)
+	spec	[node!]									;-- spec block reference
+	values	[node!]									;-- low-level struct buffer
+]
