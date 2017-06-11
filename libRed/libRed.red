@@ -54,7 +54,7 @@ Red [
 	
 	#enum image-formats! [
 		RGB_BUFFER
-		RGBA_BUFFER
+		ARGB_BUFFER
 	]
 	
 	#define TRAP_ERRORS(name body) [
@@ -481,7 +481,7 @@ Red [
 		if format = RGB_BUFFER [rgb: src]
 		img/node: OS-image/make-image width height rgb null null
 		
-		if format = RGBA_BUFFER [
+		if format = ARGB_BUFFER [
 			stride: 0
 			bitmap: OS-image/lock-bitmap img yes
 			data: OS-image/get-data bitmap :stride
