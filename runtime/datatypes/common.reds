@@ -433,6 +433,9 @@ words: context [
 	char!:			-1
 	float!:			-1
 	percent!:		-1
+	struct!:		-1
+	binary!:		-1
+	vector!:		-1
 	any-type!:		-1
 	repeat:			-1
 	foreach:		-1
@@ -626,6 +629,9 @@ words: context [
 		char!:			symbol/make "char!"
 		float!:			symbol/make "float!"
 		percent!:		symbol/make "percent!"
+		struct!:		symbol/make "struct!"
+		binary!:		symbol/make "binary!"
+		vector!:		symbol/make "vector!"
 		any-type!:		symbol/make "any-type!"
 		exit*:			symbol/make "exit"
 		return*:		symbol/make "return"

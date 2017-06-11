@@ -13,6 +13,23 @@ Red/System [
 _struct: context [
 	verbose: 0
 	
+	#enum struct-types [
+		STRUCT_TYPE_CHAR8
+		STRUCT_TYPE_CHAR16
+		STRUCT_TYPE_CHAR32
+		STRUCT_TYPE_INT8
+		STRUCT_TYPE_INT16
+		STRUCT_TYPE_INT32
+		STRUCT_TYPE_FLOAT32
+		STRUCT_TYPE_FLOAT64
+		STRUCT_TYPE_BINARY
+		STRUCT_TYPE_VEC8
+		STRUCT_TYPE_VEC16
+		STRUCT_TYPE_VEC32
+		STRUCT_TYPE_VEC64
+		STRUCT_TYPE_STRUCT
+	]
+	
 	depth: 0											;-- used to trace nesting level for FORM/MOLD
 
 	make-at: func [
@@ -227,11 +244,133 @@ _struct: context [
 		proto	[red-block!]
 		spec	[red-value!]
 		type	[integer!]
-		return:	[red-block!]
+		return:	[red-struct!]
+		/local
+			body	 [red-value!]
+			values	 [red-value!]
+			st		 [red-struct!]
+			value	 [red-value!]
+			tail	 [red-value!]
+			blk		 [red-block!]
+			word	 [red-word!]
+			int		 [red-integer!]
+			pi		 [int-ptr!]
+			types	 [byte-ptr!]
+			s		 [series!]
+			len		 [integer!]
+			sym		 [integer!]
+			bits	 [integer!]
+			type-len [integer!]
+			
 	][
 		#if debug? = yes [if verbose > 0 [print-line "struct/make"]]
 
-		null
+		if any [
+			TYPE_OF(spec) <> TYPE_BLOCK
+			2 <> block/rs-length? as red-block! spec
+		][
+			0 ; error
+		]
+		spec: block/rs-head as red-block! spec
+		body: spec + 1
+		
+		if TYPE_OF(spec) = TYPE_WORD [spec: _context/get as red-word! spec]
+		if TYPE_OF(body) = TYPE_WORD [body: _context/get as red-word! body]
+	
+		if TYPE_OF(spec) <> TYPE_BLOCK [
+			0 ; error
+		]
+		
+		st: as red-struct! stack/push*
+		st/header: TYPE_STRUCT
+		blk: as red-block! spec
+		st/spec: blk/node
+		
+		len: block/rs-length? blk
+		
+		switch TYPE_OF(body) [
+			TYPE_BLOCK [
+				if len <> block/rs-length? as red-block! body [
+					0 ; error
+				]
+				values: block/rs-head as red-block! body
+			]
+			TYPE_NONE  [values: null]
+			default    [
+				0 ; error
+			]
+		]
+		
+		st/types: alloc-bytes 4 + len
+		s: as series! st/types/value
+		pi: as int-ptr! s/offset
+		pi/value: len
+		types: (as byte-ptr! s/offset) + 4
+		
+		s: GET_BUFFER(blk)
+		value: s/offset + blk/head
+		tail: s/tail
+		
+		while [value < tail][
+			if TYPE_OF(value) <> TYPE_WORD [
+				0 ; error
+			]
+			value: value + 1
+			if TYPE_OF(value) <> TYPE_BLOCK [
+				0 ; error
+			]
+			blk: as red-block! value
+			word: as red-word! block/rs-head blk
+			sym: symbol/resolve word/symbol
+			
+			type-len: block/rs-length? blk
+			if any [type-len < 1 TYPE_OF(word) <> TYPE_WORD][
+				0 ; error
+			]
+			word: word + 1
+			bits: 0
+			
+			if all [type-len = 2 TYPE_OF(word) = TYPE_INTEGER][
+				int: as red-integer! word
+				bits: int/value
+				unless any [bits = 8 bits = 16 bits = 32 bits = 64][
+					0 ; error
+				]
+			]
+			case [
+				sym = words/char! [
+					type: switch bits [
+						0  [STRUCT_TYPE_CHAR32]
+						8  [STRUCT_TYPE_CHAR8]
+						16 [STRUCT_TYPE_CHAR16]
+						32 [STRUCT_TYPE_CHAR32]
+					]
+				]
+				sym = words/integer! [
+					type: switch bits [
+						0  [STRUCT_TYPE_INT32]
+						8  [STRUCT_TYPE_INT8]
+						16 [STRUCT_TYPE_INT16]
+						32 [STRUCT_TYPE_INT32]
+					]
+				]
+				sym = words/float! [
+					type: either bits = 32 [STRUCT_TYPE_FLOAT32][STRUCT_TYPE_FLOAT64]
+				]
+				sym = words/binary! [
+					type: STRUCT_TYPE_BINARY
+				]
+				sym = words/vector! [  ; [sub-type <bits>]
+					0
+				]
+				sym = words/struct! [
+					0
+				]
+			]
+			types/value: as-byte type
+			value: value + 1
+		]
+		st
 	]
 
 	;to: func [

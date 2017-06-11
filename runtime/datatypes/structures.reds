@@ -328,12 +328,12 @@ red-handle!: alias struct! [
 	header 	[integer!]								;-- cell header
 	padding	[integer!]								;-- align value on 64-bit boundary
 	value	[integer!]								;-- 32-bit signed integer value
-	_pad	[integer!]	
+	_pad	[integer!]
 ]
 
 red-struct!: alias struct! [
 	header 	[integer!]								;-- cell header
-	symbols	[node!]									;-- list of struct members (sym, type, offset)
+	types	[node!]									;-- list of types (array of 8-bit values)
 	spec	[node!]									;-- spec block reference
-	values	[node!]									;-- low-level struct buffer
+	values	[node!]									;-- block of values
 ]
