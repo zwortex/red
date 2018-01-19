@@ -1,5 +1,5 @@
 Red/System [
-	Title:	"MacOSX GUI backend"
+	Title:	"macOS GUI backend"
 	Author: "Qingtian Xie"
 	File: 	%gui.reds
 	Tabs: 	4
@@ -40,6 +40,7 @@ log-pixels-y:	0
 screen-size-x:	0
 screen-size-y:	0
 mac-version:	0
+nsview-id:		0
 
 ;-- for IME support
 in-composition?: no
@@ -220,7 +221,7 @@ free-handles: func [
 		objc_msgSend [hWnd sel_getUid "close"]
 		win-cnt: win-cnt - 1
 	][
-		objc_msgSend [hWnd sel_getUid "removeFromSuperview"]
+		unless close-window? [objc_msgSend [hWnd sel_getUid "removeFromSuperview"]]
 	]
 
 	state: values + FACE_OBJ_STATE
@@ -268,7 +269,9 @@ set-defaults: func [/local n [float32!]][
 		#get system/view/fonts/system
 
 	n: objc_msgSend_f32 [default-font sel_getUid "pointSize"]
-	integer/make-at 
+	n: n * as float32! 0.75
+	n: n + as float32! 0.5
+	integer/make-at
 		#get system/view/fonts/size
 		as-integer n
 ]
@@ -296,20 +299,19 @@ init: func [
 ][
 	vector/make-at as red-value! win-array 8 TYPE_INTEGER 4
 	init-selectors
+	register-classes
+	nsview-id: objc_getClass "NSView"
 
-	NSApp: objc_msgSend [objc_getClass "NSApplication" sel_getUid "sharedApplication"]
-
+	NSApp: objc_msgSend [objc_getClass "RedApplication" sel_getUid "sharedApplication"]
 	pool: objc_msgSend [objc_getClass "NSAutoreleasePool" sel_getUid "alloc"]
 	objc_msgSend [pool sel_getUid "init"]
-
-	get-os-version
-	register-classes
 
 	delegate: objc_msgSend [objc_getClass "RedAppDelegate" sel_getUid "alloc"]
 	delegate: objc_msgSend [delegate sel_getUid "init"]
 	NSAppDelegate: delegate
 	objc_msgSend [NSApp sel_getUid "setDelegate:" delegate]
 
+	get-os-version
 	create-main-menu
 
 	;dlopen "./FScript.framework/FScript" 1
@@ -342,7 +344,6 @@ init: func [
 	set-defaults
 
 	objc_msgSend [NSApp sel_getUid "setActivationPolicy:" 0]
-	objc_msgSend [NSApp sel_getUid "finishLaunching"]
 
 	get-metrics
 ]
@@ -491,7 +492,7 @@ change-rate: func [
 		TYPE_TIME [
 			tm: as red-time! rate
 			if tm/time <= 0.0 [fire [TO_ERROR(script invalid-facet-type) rate]]
-			ts: tm/time / 1E9
+			ts: tm/time
 		]
 		TYPE_NONE [exit]
 		default	  [fire [TO_ERROR(script invalid-facet-type) rate]]
@@ -510,30 +511,22 @@ change-size: func [
 	size [red-pair!]
 	type [integer!]
 	/local
-		h		[integer!]
-		w		[integer!]
-		y		[integer!]
-		x		[integer!]
 		rc		[NSRect!]
-		frame	[NSRect!]
-		saved	[int-ptr!]
-		method	[integer!]
+		frame	[NSRect! value]
+		h		[float32!]
 ][
 	rc: make-rect size/x size/y 0 0
 	if all [type = button size/y > 32][
 		objc_msgSend [hWnd sel_getUid "setBezelStyle:" NSRegularSquareBezelStyle]
 	]
 	either type = window [
-		x: 0
-		frame: as NSRect! :x
-		method: sel_getUid "frame"
-		saved: system/stack/align
-		push 0
-		push method push hWnd push frame
-		objc_msgSend_stret 3
-		system/stack/top: saved
-		frame/y: frame/y + frame/h - rc/y
-		objc_msgSend [hWnd sel_getUid "setFrame:display:animate:" frame/x frame/y rc/x rc/y yes yes]
+		frame: objc_msgSend_rect [hWnd sel_getUid "frame"]
+		h: frame/h
+		frame/w: rc/x
+		frame/h: rc/y
+		frame: objc_msgSend_rect [hWnd sel_getUid "frameRectForContentRect:" frame/x frame/y frame/w frame/h]
+		frame/y: frame/y + h - frame/h
+		objc_msgSend [hWnd sel_getUid "setFrame:display:animate:" frame/x frame/y frame/w frame/h yes yes]
 	][
 		objc_msgSend [hWnd sel_getUid "setFrameSize:" rc/x rc/y]
 		objc_msgSend [hWnd sel_getUid "setNeedsDisplay:" yes]
@@ -553,10 +546,6 @@ change-image: func [
 		id		 [integer!]
 ][
 	case [
-		type = camera [
-			snap-camera hWnd
-			until [TYPE_OF(image) = TYPE_IMAGE]			;-- wait
-		]
 		any [type = button type = check type = radio][
 			if TYPE_OF(image) <> TYPE_IMAGE [
 				objc_msgSend [hWnd sel_getUid "setImage:" 0]
@@ -567,6 +556,7 @@ change-image: func [
 			objc_msgSend [hWnd sel_getUid "setImage:" id]
 			objc_msgSend [id sel_getUid "release"]
 		]
+		type = camera [snap-camera hWnd]
 		true [
 			objc_msgSend [hWnd sel_getUid "setNeedsDisplay:" yes]
 		]
@@ -598,8 +588,10 @@ change-color: func [
 	/local
 		clr  [integer!]
 		set? [logic!]
+		t	 [integer!]
 ][
-	if TYPE_OF(color) <> TYPE_TUPLE [exit]
+	t: TYPE_OF(color)
+	if all [t <> TYPE_NONE t <> TYPE_TUPLE][exit]
 	if transparent-color? color [
 		objc_msgSend [hWnd sel_getUid "setDrawsBackground:" no]
 		exit
@@ -608,22 +600,34 @@ change-color: func [
 	case [
 		type = area [
 			hWnd: objc_msgSend [hWnd sel_getUid "documentView"]
-			set-caret-color hWnd color/array1
+			clr: either t = TYPE_NONE [00FFFFFFh][color/array1]
+			set-caret-color hWnd clr
+			if t = TYPE_NONE [clr: objc_msgSend [objc_getClass "NSColor" sel_getUid "textBackgroundColor"]]
 		]
 		type = text [
-			objc_msgSend [hWnd sel_getUid "setDrawsBackground:" yes]
+			if t = TYPE_NONE [
+				clr: objc_msgSend [objc_getClass "NSColor" sel_getUid "controlColor"]
+				set?: no
+			]
+			objc_msgSend [hWnd sel_getUid "setDrawsBackground:" set?]
 		]
 		any [type = check type = radio][
 			hWnd: objc_msgSend [hWnd sel_getUid "cell"]
+			if t = TYPE_NONE [clr: objc_msgSend [objc_getClass "NSColor" sel_getUid "controlColor"]]
 		]
-		any [type = field type = window][0]				;-- no special process
+		type = field [
+			if t = TYPE_NONE [clr: objc_msgSend [objc_getClass "NSColor" sel_getUid "textBackgroundColor"]]
+		]
+		type = window [
+			if t = TYPE_NONE [clr: objc_msgSend [objc_getClass "NSColor" sel_getUid "windowBackgroundColor"]]
+		]
 		true [
 			set?: no
 			objc_msgSend [hWnd sel_getUid "setNeedsDisplay:" yes]
 		]
 	]
 	if set? [
-		clr: to-NSColor color
+		if t = TYPE_TUPLE [clr: to-NSColor color]
 		objc_msgSend [hWnd sel_getUid "setBackgroundColor:" clr]
 	]
 ]
@@ -682,6 +686,9 @@ change-font: func [
 		title	[integer!]
 		view	[integer!]
 		storage [integer!]
+		nsfont	[integer!]
+		lm		[integer!]
+		pt		[CGPoint! value]
 ][
 	if TYPE_OF(font) <> TYPE_OBJECT [return no]
 
@@ -706,6 +713,14 @@ change-font: func [
 				hWnd sel_getUid "setTextColor:"
 				objc_msgSend [attrs sel_getUid "objectForKey:" NSForegroundColorAttributeName]
 			]
+		]
+		if type = text-list [
+			nsfont: objc_msgSend [attrs sel_getUid "objectForKey:" NSFontAttributeName]
+			lm: objc_msgSend [objc_msgSend [objc_getClass "NSLayoutManager" sel_alloc] sel_init]
+			pt/x: (as float32! 1.0) + objc_msgSend_f32 [lm sel_getUid "defaultLineHeightForFont:" nsfont]
+			objc_msgSend [lm sel_release]
+			view: objc_msgSend [hWnd sel_getUid "documentView"]
+			objc_msgSend [view sel_getUid "setRowHeight:" pt/x]
 		]
 		values: (object/get-values face) + FACE_OBJ_TEXT
 		if TYPE_OF(values) <> TYPE_STRING [return no]			;-- accept any-string! ?
@@ -772,6 +787,39 @@ change-visible: func [
 	]
 ]
 
+change-enabled: func [
+	hWnd	 [integer!]
+	enabled? [logic!]
+	type	 [integer!]
+	/local
+		obj  [integer!]
+][
+	case [
+		type = area [
+			obj: objc_msgSend [hWnd sel_getUid "documentView"]
+			objc_msgSend [obj sel_getUid "setSelectable:" enabled?]
+			objc_msgSend [obj sel_getUid "setEditable:" enabled?]
+			either enabled? [
+				objc_msgSend [
+					obj sel_getUid "setTextColor:"
+					objc_msgSend [objc_getClass "NSColor" sel_getUid "controlTextColor"]
+				]
+			][
+				objc_msgSend [
+					obj sel_getUid "setTextColor:"
+					objc_msgSend [objc_getClass "NSColor" sel_getUid "disabledControlTextColor"]
+				]
+			]
+		]
+		all [type <> base type <> window type <> panel][
+			objc_msgSend [obj sel_getUid "setEnabled:" enabled?]
+		]
+		true [0]
+	]
+	either enabled? [obj: 0][obj: hWnd]
+	objc_setAssociatedObject hWnd RedEnableKey obj OBJC_ASSOCIATION_ASSIGN
+]
+
 change-text: func [
 	hWnd	[integer!]
 	values	[red-value!]
@@ -809,7 +857,7 @@ change-text: func [
 				any [type = field type = text][
 					objc_msgSend [hWnd sel_getUid "setStringValue:" txt]
 				]
-				any [type = button type = radio type = check] [
+				any [type = button type = radio type = check type = window type = group-box][
 					objc_msgSend [hWnd sel_getUid "setTitle:" txt]
 				]
 				true [0]
@@ -869,12 +917,7 @@ change-data: func [
 			objc_msgSend [objc_msgSend [hWnd sel_getUid "documentView"] sel_getUid "reloadData"]
 		]
 		any [type = drop-list type = drop-down][
-			init-combo-box
-				hWnd
-				as red-block! data
-				null
-				as red-integer! values + FACE_OBJ_SELECTED
-				type = drop-list
+			init-combo-box hWnd as red-block! data null type = drop-list
 		]
 		true [0]										;-- default, do nothing
 	]
@@ -891,7 +934,6 @@ change-selection: func [
 ][
 	if type <> window [
 		idx: either TYPE_OF(int) = TYPE_INTEGER [int/value - 1][-1]
-		if idx < 0 [exit]								;-- @@ should unselect the items ?
 	]
 	case [
 		type = camera [
@@ -904,9 +946,12 @@ change-selection: func [
 		]
 		type = text-list [
 			hWnd: objc_msgSend [hWnd sel_getUid "documentView"]
+			if idx = -1 [
+				objc_msgSend [hWnd sel_getUid "deselectAll:" hWnd]
+				exit
+			]
 			sz: -1 + objc_msgSend [hWnd sel_getUid "numberOfRows"]
-			if sz < 0 [exit]
-			if sz < idx [idx: sz]			;-- select the last one
+			if any [sz < 0 sz < idx][exit]
 			idx: objc_msgSend [objc_getClass "NSIndexSet" sel_getUid "indexSetWithIndex:" idx]
 			objc_msgSend [
 				hWnd sel_getUid "selectRowIndexes:byExtendingSelection:" idx no
@@ -915,11 +960,23 @@ change-selection: func [
 		]
 		any [type = drop-list type = drop-down][
 			sz: -1 + objc_msgSend [hWnd sel_getUid "numberOfItems"]
-			if sz < 0 [exit]
-			if sz < idx [idx: sz]
-			objc_msgSend [hWnd sel_getUid "selectItemAtIndex:" idx]
-			idx: objc_msgSend [hWnd sel_getUid "objectValueOfSelectedItem"]
-			objc_msgSend [hWnd sel_getUid "setObjectValue:" idx]
+			if idx = -1 [		;-- deselect current item
+				idx: objc_msgSend [hWnd sel_getUid "indexOfSelectedItem"]
+				if idx <> -1 [
+					objc_msgSend [hWnd sel_getUid "deselectItemAtIndex:" idx]
+				]
+				exit
+			]
+			if any [sz < 0 sz < idx][exit]
+			either type = drop-list [
+				objc_msgSend [hWnd sel_getUid "selectItemAtIndex:" idx + 1]
+				idx: objc_msgSend [hWnd sel_getUid "titleOfSelectedItem"]
+				objc_msgSend [hWnd sel_getUid "setTitle:" idx]
+			][
+				objc_msgSend [hWnd sel_getUid "selectItemAtIndex:" idx]
+				idx: objc_msgSend [hWnd sel_getUid "objectValueOfSelectedItem"]
+				objc_msgSend [hWnd sel_getUid "setObjectValue:" idx]
+			]
 		]
 		type = tab-panel [select-tab hWnd int]
 		type = window [
@@ -962,71 +1019,72 @@ insert-list-item: func [
 	hWnd  [integer!]
 	item  [red-string!]
 	pos	  [integer!]
+	list? [logic!]
 	/local
 		len [integer!]
+		sel [integer!]
 ][
 	unless TYPE_OF(item) = TYPE_STRING [exit]
 
 	len: objc_msgSend [hWnd sel_getUid "numberOfItems"]
-	if pos > len [pos: len]
-	objc_msgSend [
-		hWnd sel_getUid "insertItemWithObjectValue:atIndex:"
-		to-CFString item pos
+	sel: either list? [
+		pos: pos + 1
+		sel_getUid "insertItemWithTitle:atIndex:"
+	][
+		sel_getUid "insertItemWithObjectValue:atIndex:"
 	]
+	if pos > len [pos: len]
+	objc_msgSend [hWnd sel to-NSString item pos]
 ]
 
 init-combo-box: func [
 	combo		[integer!]
 	data		[red-block!]
 	caption		[integer!]
-	selected	[red-integer!]
 	drop-list?	[logic!]
 	/local
-		str	 [red-string!]
-		tail [red-string!]
-		len  [integer!]
-		val  [integer!]
+		str		[red-string!]
+		tail	[red-string!]
+		len		[integer!]
+		val		[integer!]
+		sel-add [integer!]
 ][
 	if any [
 		TYPE_OF(data) = TYPE_BLOCK
 		TYPE_OF(data) = TYPE_HASH
 		TYPE_OF(data) = TYPE_MAP
 	][
+		objc_msgSend [combo sel_getUid "removeAllItems"]
+		either drop-list? [
+			sel-add: sel_getUid "addItemWithTitle:"
+			objc_msgSend [combo sel-add NSString("")]
+		][
+			sel-add: sel_getUid "addItemWithObjectValue:"
+		]
+
 		str:  as red-string! block/rs-head data
 		tail: as red-string! block/rs-tail data
-
-		objc_msgSend [combo sel_getUid "removeAllItems"]
 
 		if str = tail [exit]
 
 		while [str < tail][
 			if TYPE_OF(str) = TYPE_STRING [
 				len: -1
-				val: CFString((unicode/to-utf8 str :len))
-				objc_msgSend [combo sel_getUid "addItemWithObjectValue:" val]
+				val: NSString((unicode/to-utf8 str :len))
+				objc_msgSend [combo sel-add val]
 			]
 			str: str + 1
 		]
 	]
 
-	len: objc_msgSend [combo sel_getUid "numberOfItems"]
-
-	if TYPE_OF(selected) = TYPE_INTEGER [
-		if len > 0 [
-			if selected/value < len [len: selected/value]
-			objc_msgSend [combo sel_getUid "selectItemAtIndex:" len - 1]
-			val: objc_msgSend [combo sel_getUid "objectValueOfSelectedItem"]
-			objc_msgSend [combo sel_getUid "setObjectValue:" val]
-		]
-	]
-
-	if zero? len [objc_msgSend [combo sel_getUid "setStringValue:" NSString("")]]
-
 	either drop-list? [
-		objc_msgSend [combo sel_getUid "setEditable:" false]
+		objc_msgSend [combo sel_getUid "selectItemAtIndex:" -1]
 	][
-		if caption <> 0 [
+		either caption <> 0 [
 			objc_msgSend [combo sel_getUid "setStringValue:" caption]
+		][
+			len: objc_msgSend [combo sel_getUid "numberOfItems"]
+			if zero? len [objc_msgSend [combo sel_getUid "setStringValue:" NSString("")]]
 		]
 	]
 ]
@@ -1040,14 +1098,16 @@ init-window: func [
 	/local
 		flags		[integer!]
 		sel_Hidden	[integer!]
+		main-win?	[logic!]
 ][
 	flags: 0
-	if bits and FACET_FLAGS_NO_BORDER = 0 [
+	main-win?: yes
+	either bits and FACET_FLAGS_NO_BORDER = 0 [
 		flags: NSClosableWindowMask
 		if bits and FACET_FLAGS_RESIZE <> 0 [flags: flags or NSResizableWindowMask]
-		if bits and FACET_FLAGS_NO_TITLE = 0 [flags: flags or NSTitledWindowMask]
+		either bits and FACET_FLAGS_NO_TITLE = 0 [flags: flags or NSTitledWindowMask][main-win?: no]
 		if bits and FACET_FLAGS_NO_MIN  = 0 [flags: flags or NSMiniaturizableWindowMask]
-	]
+	][main-win?: no]
 	window: objc_msgSend [
 		window
 		sel_getUid "initWithContentRect:styleMask:backing:defer:"
@@ -1080,7 +1140,7 @@ init-window: func [
 	objc_msgSend [window sel_getUid "setAcceptsMouseMovedEvents:" yes]
 	objc_msgSend [window sel_getUid "becomeFirstResponder"]
 	objc_msgSend [window sel_getUid "makeKeyAndOrderFront:" 0]
-	objc_msgSend [window sel_getUid "makeMainWindow"]
+	if main-win? [objc_msgSend [window sel_getUid "makeMainWindow"]]
 ]
 
 transparent-base?: func [
@@ -1151,7 +1211,7 @@ init-base-face: func [
 	]
 
 	if TYPE_OF(menu) = TYPE_BLOCK [set-context-menu obj menu]
-	if transparent-base? color [objc_msgSend [obj sel_getUid "setWantsLayer:" yes]]
+	;if transparent-base? color [objc_msgSend [obj sel_getUid "setWantsLayer:" yes]]
 ]
 
 make-area: func [
@@ -1169,7 +1229,7 @@ make-area: func [
 	rc/x: as float32! 0.0
 	rc/y: as float32! 0.0
 
-	x: either border? [NSGrooveBorder][NSNoBorder]
+	x: either border? [NSBezelBorder][NSNoBorder]
 	objc_msgSend [container sel_getUid "setBorderType:" x]
 	objc_msgSend [container sel_getUid "setAutohidesScrollers:" yes]
 	objc_msgSend [container sel_getUid "setHasVerticalScroller:" yes]
@@ -1190,6 +1250,7 @@ make-area: func [
 	objc_msgSend [obj sel_getUid "setHorizontallyResizable:" yes]
 	objc_msgSend [obj sel_getUid "setMinSize:" rc/x rc/h]
 	objc_msgSend [obj sel_getUid "setMaxSize:" rc/y rc/y]
+	objc_msgSend [obj sel_getUid "setAutomaticQuoteSubstitutionEnabled:" no]
 	;objc_msgSend [obj sel_getUid "setAutoresizingMask:" NSViewWidthSizable]
 
 	tbox: objc_msgSend [obj sel_getUid "textContainer"]
@@ -1235,6 +1296,7 @@ make-text-list: func [
 	]
 	store-face-to-obj obj id face
 
+	objc_msgSend [obj sel_getUid "setRowSizeStyle:" 0]
 	objc_msgSend [obj sel_getUid "setHeaderView:" 0]
 	objc_msgSend [obj sel_getUid "addTableColumn:" column]
 	objc_msgSend [obj sel_getUid "setDelegate:" obj]
@@ -1253,10 +1315,10 @@ update-combo-box: func [
 	new	  [red-value!]
 	index [integer!]
 	part  [integer!]
-	drop? [logic!]										;-- TRUE: drop-list or drop-down widgets
+	list? [logic!]										;-- TRUE: drop-list or drop-down widgets
 	/local
 		hWnd [integer!]
-		msg  [integer!]
+		nstr [integer!]
 		str  [red-string!]
 ][
 	hWnd: get-face-handle face
@@ -1275,8 +1337,14 @@ update-combo-box: func [
 						zero? index
 					][
 						objc_msgSend [hWnd sel_getUid "removeAllItems"]
-						objc_msgSend [hWnd sel_getUid "setStringValue:" NSString("")]
+						nstr: NSString("")
+						either list? [
+							objc_msgSend [hWnd sel_getUid "setTitle:" nstr]
+						][
+							objc_msgSend [hWnd sel_getUid "setStringValue:" nstr]
+						]
 					][
+						if list? [index: index + 1]
 						loop part [
 							objc_msgSend [hWnd sel_getUid "removeItemAtIndex:" index]
 						]
@@ -1302,7 +1370,7 @@ update-combo-box: func [
 						if sym <> words/_insert/symbol [
 							objc_msgSend [hWnd sel_getUid "removeItemAtIndex:" index]
 						]
-						insert-list-item hWnd str index
+						insert-list-item hWnd str index list?
 						if sym = words/_reverse/symbol [index: index + 1]
 						str: str + 1
 					]
@@ -1312,7 +1380,7 @@ update-combo-box: func [
 		]
 		TYPE_STRING [
 			objc_msgSend [hWnd sel_getUid "removeItemAtIndex:" index]
-			insert-list-item hWnd as red-string! value index
+			insert-list-item hWnd as red-string! value index list?
 		]
 		default [assert false]			;@@ raise a runtime error
 	]
@@ -1423,16 +1491,21 @@ set-hint-text: func [
 parse-common-opts: func [
 	hWnd	[integer!]
 	options [red-block!]
+	type	[integer!]
 	/local
 		word	[red-word!]
 		w		[red-word!]
 		img		[red-image!]
+		bool	[red-logic!]
 		len		[integer!]
 		sym		[integer!]
 		cur		[c-string!]
 		hcur	[integer!]
 		nsimg	[integer!]
+		btn?	[logic!]
+		pt		[CGPoint! value]
 ][
+	btn?: yes
 	if TYPE_OF(options) = TYPE_BLOCK [
 		word: as red-word! block/rs-head options
 		len: block/rs-length? options
@@ -1445,12 +1518,14 @@ parse-common-opts: func [
 					either TYPE_OF(w) = TYPE_IMAGE [
 						img: as red-image! w
 						nsimg: objc_msgSend [
-							objc_getClass "NSImage" sel_alloc
+							OBJC_ALLOC("NSImage")
 							sel_getUid "initWithCGImage:size:" OS-image/to-cgimage img 0 0
 						]
+						pt/x: as float32! IMAGE_WIDTH(img/size) / 2
+						pt/y: as float32! IMAGE_HEIGHT(img/size) / 2
 						hcur: objc_msgSend [
-							objc_getClass "NSCursor" sel_alloc
-							sel_getUid "initWithImage:hotSpot:" nsimg 0 0
+							OBJC_ALLOC("NSCursor")
+							sel_getUid "initWithImage:hotSpot:" nsimg pt/x pt/y
 						]
 						objc_msgSend [nsimg sel_release]
 					][
@@ -1465,7 +1540,7 @@ parse-common-opts: func [
 					]
 					if hcur <> 0 [objc_setAssociatedObject hWnd RedCursorKey hcur OBJC_ASSOCIATION_ASSIGN]
 				]
-				sym = _height [
+				sym = _class [
 					w: word + 1
 					sym: symbol/resolve w/symbol
 					sym: case [
@@ -1474,13 +1549,26 @@ parse-common-opts: func [
 						sym = _mini		[2]			;-- 16
 						true			[0]
 					]
-					objc_msgSend [hWnd sel_getUid "setControlSize:" sym]
+					objc_msgSend [
+						objc_msgSend [hWnd sel_getUid "cell"]
+						sel_getUid "setControlSize:" sym
+					]
+					btn?: no
+				]
+				sym = _accelerated [
+					bool: as red-logic! word + 1
+					if bool/value [objc_msgSend [hWnd sel_getUid "setWantsLayer:" yes]]
 				]
 				true [0]
 			]
 			word: word + 2
 			len: len - 2
 		]
+	]
+
+	if type = button [
+		len: either btn? [NSRegularSquareBezelStyle][NSRoundedBezelStyle]
+		objc_msgSend [hWnd sel_getUid "setBezelStyle:" len]
 	]
 ]
 
@@ -1491,7 +1579,8 @@ OS-refresh-window: func [hWnd [integer!]][0]
 OS-show-window: func [
 	hWnd [integer!]
 ][
-	make-event hWnd 0 EVT_SIZE
+	;make-event hWnd 0 EVT_SIZE
+	change-selection hWnd (as red-integer! get-face-values hWnd) + FACE_OBJ_SELECTED window
 ]
 
 OS-make-view: func [
@@ -1499,33 +1588,32 @@ OS-make-view: func [
 	parent	[integer!]
 	return: [integer!]
 	/local
-		values	  [red-value!]
-		type	  [red-word!]
-		str		  [red-string!]
-		tail	  [red-string!]
-		offset	  [red-pair!]
-		size	  [red-pair!]
-		data	  [red-block!]
-		int		  [red-integer!]
-		img		  [red-image!]
-		menu	  [red-block!]
-		show?	  [red-logic!]
-		open?	  [red-logic!]
-		selected  [red-integer!]
-		para	  [red-object!]
-		rate	  [red-value!]
-		flags	  [integer!]
-		bits	  [integer!]
-		sym		  [integer!]
-		id		  [integer!]
-		class	  [c-string!]
-		caption   [integer!]
-		len		  [integer!]
-		obj		  [integer!]
-		rc		  [NSRect!]
-		flt		  [float!]
+		values	[red-value!]
+		type	[red-word!]
+		str		[red-string!]
+		tail	[red-string!]
+		offset	[red-pair!]
+		size	[red-pair!]
+		data	[red-block!]
+		int		[red-integer!]
+		img		[red-image!]
+		menu	[red-block!]
+		show?	[red-logic!]
+		open?	[red-logic!]
+		rate	[red-value!]
+		font	[red-object!]
+		flags	[integer!]
+		bits	[integer!]
+		sym		[integer!]
+		id		[integer!]
+		class	[c-string!]
+		caption [integer!]
+		len		[integer!]
+		obj		[integer!]
+		rc		[NSRect!]
+		flt		[float!]
 ][
-	stack/mark-func words/_body
+	stack/mark-native words/_body
 
 	values: object/get-values face
 
@@ -1534,12 +1622,11 @@ OS-make-view: func [
 	offset:   as red-pair!		values + FACE_OBJ_OFFSET
 	size:	  as red-pair!		values + FACE_OBJ_SIZE
 	show?:	  as red-logic!		values + FACE_OBJ_VISIBLE?
-	open?:	  as red-logic!		values + FACE_OBJ_ENABLE?
+	open?:	  as red-logic!		values + FACE_OBJ_ENABLED?
 	data:	  as red-block!		values + FACE_OBJ_DATA
 	img:	  as red-image!		values + FACE_OBJ_IMAGE
 	menu:	  as red-block!		values + FACE_OBJ_MENU
-	selected: as red-integer!	values + FACE_OBJ_SELECTED
-	para:	  as red-object!	values + FACE_OBJ_PARA
+	font:	  as red-object!	values + FACE_OBJ_FONT
 	rate:						values + FACE_OBJ_RATE
 
 	bits: 	  get-flags as red-block! values + FACE_OBJ_FLAGS
@@ -1573,12 +1660,11 @@ OS-make-view: func [
 		][
 			class: either bits and FACET_FLAGS_SCROLLABLE = 0 ["RedBase"]["RedScrollBase"]
 		]
-		any [
-			sym = drop-down
-			sym = drop-list
-		][
+		sym = drop-down [
 			class: "RedComboBox"
-			size/y: 26									;@@ set to default height
+		]
+		sym = drop-list [
+			class: "RedPopUpButton"
 		]
 		sym = slider [class: "RedSlider"]
 		sym = progress [class: "RedProgress"]
@@ -1607,14 +1693,24 @@ OS-make-view: func [
 		0
 	]
 	rc: make-rect offset/x offset/y size/x size/y
-	if sym <> window [
-		obj: objc_msgSend [obj sel_getUid "initWithFrame:" rc/x rc/y rc/w rc/h]
+	case [
+		sym = window [
+			rc: make-rect offset/x screen-size-y - offset/y - size/y size/x size/y
+			init-window face obj caption bits rc
+		]
+		sym = drop-list [
+			objc_msgSend [obj sel_getUid "initWithFrame:pullsDown:" rc/x rc/y rc/w rc/h yes]
+		]
+		true [objc_msgSend [obj sel_getUid "initWithFrame:" rc/x rc/y rc/w rc/h]]
 	]
+
+	parse-common-opts obj as red-block! values + FACE_OBJ_OPTIONS sym
 
 	case [
 		sym = text [
 			objc_msgSend [obj sel_getUid "setEditable:" false]
 			objc_msgSend [obj sel_getUid "setBordered:" false]
+			id: objc_msgSend [obj sel_getUid "cell"]
 			objc_msgSend [obj sel_getUid "setDrawsBackground:" false]
 			if caption <> 0 [objc_msgSend [obj sel_getUid "setStringValue:" caption]]
 		]
@@ -1635,15 +1731,6 @@ OS-make-view: func [
 			make-text-list face obj rc
 		]
 		any [sym = button sym = check sym = radio][
-			len: either any [
-				size/y > 32
-				TYPE_OF(img) = TYPE_IMAGE
-			][
-				NSRegularSquareBezelStyle
-			][
-				NSRoundedBezelStyle
-			]
-			objc_msgSend [obj sel_getUid "setBezelStyle:" len]
 			if sym <> button [
 				objc_msgSend [obj sel_getUid "setButtonType:" flags]
 				set-logic-state obj as red-logic! data no
@@ -1666,8 +1753,6 @@ OS-make-view: func [
 			objc_msgSend [obj sel_getUid "setDelegate:" obj]
 		]
 		sym = window [
-			rc: make-rect offset/x screen-size-y - offset/y - size/y size/x size/y
-			init-window face obj caption bits rc
 			win-cnt: win-cnt + 1
 
 			if all [						;@@ application menu ?
@@ -1704,12 +1789,14 @@ OS-make-view: func [
 				objc_msgSend [obj sel_getUid "setTitle:" caption]
 			]
 		]
-		any [
-			sym = drop-down
-			sym = drop-list
-		][
-			init-combo-box obj data caption selected sym = drop-list
+		sym = drop-down [
+			init-combo-box obj data caption no
 			objc_msgSend [obj sel_getUid "setDelegate:" obj]
+		]
+		sym = drop-list [
+			init-combo-box obj data caption yes
+			objc_msgSend [obj sel_getUid "setTarget:" obj]
+			objc_msgSend [obj sel_getUid "setAction:" sel_getUid "popup-button-action:"]
 		]
 		sym = camera [
 			init-camera obj rc data
@@ -1717,11 +1804,13 @@ OS-make-view: func [
 		true [0]
 	]
 
-	parse-common-opts obj as red-block! values + FACE_OBJ_OPTIONS
+	change-selection obj as red-integer! values + FACE_OBJ_SELECTED sym
+	change-para obj face as red-object! values + FACE_OBJ_PARA font sym
 
 	unless show?/value [change-visible obj no sym]
+	unless open?/value [change-enabled obj no sym]
 
-	change-font obj face as red-object! values + FACE_OBJ_FONT sym
+	change-font obj face font sym
 	if TYPE_OF(rate) <> TYPE_NONE [change-rate obj rate]
 	if sym <> base [change-color obj as red-tuple! values + FACE_OBJ_COLOR sym]
 
@@ -1779,11 +1868,9 @@ OS-update-view: func [
 	if flags and FACET_FLAG_DATA <> 0 [
 		change-data hWnd values
 	]
-	if flags and FACET_FLAG_ENABLE? <> 0 [
-		bool: as red-logic! values + FACE_OBJ_ENABLE?
-		if type <> window [
-			objc_msgSend [hWnd sel_getUid "setEnabled:" bool/value]
-		]
+	if flags and FACET_FLAG_ENABLED? <> 0 [
+		bool: as red-logic! values + FACE_OBJ_ENABLED?
+		change-enabled hWnd bool/value type
 	]
 	if flags and FACET_FLAG_VISIBLE? <> 0 [
 		bool: as red-logic! values + FACE_OBJ_VISIBLE?
@@ -1810,9 +1897,14 @@ OS-update-view: func [
 	if flags and FACET_FLAG_FONT <> 0 [
 		change-font hWnd face as red-object! values + FACE_OBJ_FONT type
 	]
-	;if flags and FACET_FLAG_PARA <> 0 [
-	;	update-para face 0
-	;]
+	if flags and FACET_FLAG_PARA <> 0 [
+		change-para
+			hWnd
+			face
+			as red-object! values + FACE_OBJ_PARA
+			as red-object! values + FACE_OBJ_FONT
+			type
+	]
 	if flags and FACET_FLAG_MENU <> 0 [
 		menu: as red-block! values + FACE_OBJ_MENU
 		if menu-bar? menu window [
@@ -1895,7 +1987,7 @@ OS-update-facet: func [
 	sym: symbol/resolve facet/symbol
 
 	case [
-		sym = facets/pane [0]
+		;sym = facets/pane [0]
 		sym = facets/data [
 			word: as red-word! get-node-facet face/ctx FACE_OBJ_TYPE
 			type: symbol/resolve word/symbol
@@ -1931,21 +2023,49 @@ OS-to-image: func [
 	face	[red-object!]
 	return: [red-image!]
 	/local
-		hWnd 	[handle!]
-		dc		[handle!]
-		mdc		[handle!]
-		rect	[RECT_STRUCT]
-		width	[integer!]
-		height	[integer!]
-		bmp		[handle!]
-		bitmap	[integer!]
-		img		[red-image!]
-		word	[red-word!]
+		view	[integer!]
+		data	[integer!]
+		rc		[NSRect!]
+		sz		[red-pair!]
+		bmp		[integer!]
+		img		[integer!]
+		ret		[red-image!]
 		type	[integer!]
-		size	[red-pair!]
-		screen? [logic!]
+		word	[red-word!]
 ][
-	as red-image! none-value
+	word: as red-word! get-node-facet face/ctx FACE_OBJ_TYPE
+	type: symbol/resolve word/symbol
+	case [
+		type = screen [
+			bmp: CGWindowListCreateImage 0 0 7F800000h 7F800000h 1 0 0		;-- INF
+			ret: image/init-image as red-image! stack/push* OS-image/load-cgimage as int-ptr! bmp
+		]
+		type = camera [
+			view: as-integer face-handle? face
+			either zero? view [ret: as red-image! none-value][
+				ret: as red-image! (object/get-values face) + FACE_OBJ_IMAGE
+				ret/header: TYPE_NONE						;@@ TBD release old image?
+				change-image view ret type
+			]
+		]
+		true [
+			view: as-integer face-handle? face
+			either zero? view [ret: as red-image! none-value][
+				sz: as red-pair! (object/get-values face) + FACE_OBJ_SIZE
+				rc: make-rect 0 0 sz/x sz/y
+				data: objc_msgSend [view sel_getUid "dataWithPDFInsideRect:" rc/x rc/y rc/w rc/h]
+				img: objc_msgSend [
+					objc_msgSend [objc_getClass "NSImage" sel_alloc]
+					sel_getUid "initWithData:" data
+				]
+				bmp: objc_msgSend [img sel_getUid "CGImageForProposedRect:context:hints:" 0 0 0]
+				ret: image/init-image as red-image! stack/push* OS-image/load-cgimage as int-ptr! bmp
+				objc_msgSend [bmp sel_getUid "retain"]
+				objc_msgSend [img sel_release]
+			]
+		]
+	]
+	ret
 ]
 
 OS-do-draw: func [

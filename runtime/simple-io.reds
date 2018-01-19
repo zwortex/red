@@ -20,6 +20,25 @@ simple-io: context [
 		RIO_NEW:	16
 	]
 
+	strupr: func [
+		"ASCII only"
+		str		[c-string!]
+		return: [c-string!]
+		/local
+			s	[c-string!]
+			c	[byte!]
+	][
+		s: str
+		while [
+			c: s/1
+			c <> null-byte
+		][
+			if c >= #"a" [s/1: c - #" "]
+			s: s + 1
+		]
+		str
+	]
+
 	#either OS = 'Windows [
 		stat!: alias struct! [val [integer!]]
 
@@ -158,6 +177,12 @@ simple-io: context [
 					return:		[integer!]
 				]
 			]
+			LIBC-file cdecl [
+				wcsupr: "_wcsupr" [
+					str		[c-string!]
+					return:	[c-string!]
+				]
+			]
 		]
 	][
 		#case [
@@ -189,7 +214,7 @@ simple-io: context [
 					pad0		[integer!]
 					pad1		[integer!]
 				]
-				dirent!: alias struct! [				;@@ the same as MacOSX
+				dirent!: alias struct! [				;@@ the same as macOS
 					d_ino		[integer!]
 					d_reclen	[byte!]
 					_d_reclen_	[byte!]
@@ -198,7 +223,7 @@ simple-io: context [
 					;d_name		[byte! [256]]
 				]
 			]
-			OS = 'MacOSX [
+			OS = 'macOS [
 				stat!: alias struct! [
 					st_dev		[integer!]
 					st_ino		[integer!]
@@ -407,7 +432,7 @@ simple-io: context [
 		]
 
 		#case [
-			any [OS = 'MacOSX OS = 'FreeBSD OS = 'Android] [
+			any [OS = 'macOS OS = 'FreeBSD OS = 'Android] [
 				#import [
 					LIBC-file cdecl [
 						;-- https://developer.apple.com/library/mac/documentation/Darwin/Reference/ManPages/10.6/man2/stat.2.html?useVersion=10.6
@@ -435,7 +460,7 @@ simple-io: context [
 
 		]
 
-		#either OS = 'MacOSX [
+		#either OS = 'macOS [
 			#import [
 				LIBC-file cdecl [
 					lseek: "lseek" [
@@ -613,7 +638,7 @@ simple-io: context [
 			OS = 'Windows [
 				GetFileSize file null
 			]
-			any [OS = 'MacOSX OS = 'FreeBSD OS = 'Android] [
+			any [OS = 'macOS OS = 'FreeBSD OS = 'Android] [
 				_stat file s
 				s/st_size
 			]
@@ -643,7 +668,7 @@ simple-io: context [
 			OS = 'Windows [
 				SetFilePointer file offset null SET_FILE_BEGIN
 			]
-			OS = 'MacOSX [
+			OS = 'macOS [
 				lseek file offset 0 0					;@@ offset is 64bit
 			]
 			true [
@@ -658,13 +683,13 @@ simple-io: context [
 		size	[integer!]
 		return:	[integer!]
 		/local
-			read-sz [integer!]
-			res		[integer!]
+			len [integer!]
+			res [integer!]
 	][
 		#either OS = 'Windows [
-			read-sz: -1
-			res: ReadFile file buffer size :read-sz null
-			res: either zero? res [-1][1]
+			len: 0
+			res: ReadFile file buffer size :len null
+			res: either zero? res [-1][len]
 		][
 			res: _read file buffer size
 		]
@@ -683,7 +708,7 @@ simple-io: context [
 		#either OS = 'Windows [
 			len: 0
 			ret: WriteFile file data size :len null
-			ret: either zero? ret [-1][1]
+			ret: either zero? ret [-1][len]
 		][
 			ret: _write file data size
 		]
@@ -755,6 +780,17 @@ simple-io: context [
 		if file < 0 [return none-value]
 
 		size: file-size? file
+
+		if zero? size [				;-- /proc filesystem give 0 size
+			buffer: allocate 4096
+			while [
+				len: read-data file buffer 4096
+				len > 0
+			][
+				size: size + len
+			]
+			free buffer
+		]
 
 		if size <= 0 [
 			close-file file
@@ -1011,7 +1047,7 @@ simple-io: context [
 						]
 					]
 				][
-					#either OS = 'MacOSX [
+					#either OS = 'macOS [
 						len: as-integer info/d_namlen
 					][
 						len: length? as-c-string name
@@ -1093,7 +1129,7 @@ simple-io: context [
 			]
 			true [
 				len: 0
-				actions/mold as red-value! data buffer no yes no null 0 0
+				actions/mold as red-value! data buffer no no no null 0 0
 				buf: value-to-buffer as red-value! buffer part :len binary? null
 				string/rs-reset buffer
 			]
@@ -1168,7 +1204,7 @@ simple-io: context [
 				GetTypeInfo				[integer!]
 				GetIDsOfNames			[integer!]
 				Invoke					[integer!]
-				SetProxy				[integer!]
+				SetProxy				[function! [this [this!] setting [integer!] server [integer!] server2 [integer!] server3 [integer!] server4 [integer!] bypass [integer!] bypass2 [integer!] bypass3 [integer!] bypass4 [integer!] return: [integer!]]]
 				SetCredentials			[integer!]
 				Open					[function! [this [this!] method [byte-ptr!] url [byte-ptr!] async1 [integer!] async2 [integer!] async3 [integer!] async4 [integer!] return: [integer!]]]
 				SetRequestHeader		[function! [this [this!] header [byte-ptr!] value [byte-ptr!] return: [integer!]]]
@@ -1267,9 +1303,9 @@ simple-io: context [
 				/local
 					action	[c-string!]
 					hr 		[integer!]
-					clsid	[tagGUID]
-					async 	[tagVARIANT]
-					body 	[tagVARIANT]
+					clsid	[tagGUID value]
+					async 	[tagVARIANT value]
+					body 	[tagVARIANT value]
 					IH		[interface!]
 					http	[IWinHttpRequest]
 					bstr-d	[byte-ptr!]
@@ -1277,6 +1313,7 @@ simple-io: context [
 					bstr-u	[byte-ptr!]
 					buf-ptr [integer!]
 					s		[series!]
+					str1	[red-string! value]
 					value	[red-value!]
 					tail	[red-value!]
 					l-bound [integer!]
@@ -1285,30 +1322,35 @@ simple-io: context [
 					res		[red-value!]
 					blk		[red-block!]
 					len		[integer!]
+					proxy	[tagVARIANT value]
 			][
 				res: as red-value! none-value
 				len: -1
 				buf-ptr: 0
 				bstr-d: null
-				clsid: declare tagGUID
-				async: declare tagVARIANT
-				body:  declare tagVARIANT
-				VariantInit async
-				VariantInit body
+				VariantInit :async
+				VariantInit :body
 				async/data1: VT_BOOL
 				async/data3: 0							;-- VARIANT_FALSE
 
-				switch method [
-					HTTP_GET [
+				case [
+					method = words/get [
 						action: #u16 "GET"
 						body/data1: VT_ERROR
 					]
-					HTTP_PUT [
-						action: #u16 "PUT"
-						--NOT_IMPLEMENTED--
+					method = words/head [
+						action: #u16 "HEAD"
+						body/data1: VT_ERROR
 					]
-					HTTP_POST [
-						action: #u16 "POST"
+					true [
+						either method = words/post [action: #u16 "POST"][
+							s: GET_BUFFER(symbols)
+							copy-cell s/offset + method - 1 as cell! str1
+							str1/header: TYPE_STRING
+							str1/head: 0
+							str1/cache: null
+							action: wcsupr unicode/to-utf16 str1
+						]
 						either null? data [
 							body/data1: VT_ERROR
 						][
@@ -1317,20 +1359,23 @@ simple-io: context [
 							body/data3: as-integer bstr-d
 						]
 					]
-					default [--NOT_IMPLEMENTED--]
 				]
 
 				IH: declare interface!
 				http: null
 
-				hr: CLSIDFromProgID #u16 "WinHttp.WinHttpRequest.5.1" clsid
+				hr: CLSIDFromProgID #u16 "WinHttp.WinHttpRequest.5.1" :clsid
 
 				if hr >= 0 [
-					hr: CoCreateInstance as int-ptr! clsid 0 CLSCTX_INPROC_SERVER IID_IWinHttpRequest IH
+					hr: CoCreateInstance as int-ptr! :clsid 0 CLSCTX_INPROC_SERVER IID_IWinHttpRequest IH
 				]
 
 				if hr >= 0 [
 					http: as IWinHttpRequest IH/ptr/vtbl
+					;VariantInit :proxy
+					;proxy/data1: VT_BSTR
+					;proxy/data3: as-integer SysAllocString #u16 "127.0.0.1:1235"
+					;http/SetProxy IH/ptr 2 proxy/data1 proxy/data2 proxy/data3 proxy/data4 0 0 0 0
 					bstr-m: SysAllocString action
 					bstr-u: SysAllocString unicode/to-utf16 as red-string! url
 					hr: http/Open IH/ptr bstr-m bstr-u async/data1 async/data2 async/data3 async/data4
@@ -1378,8 +1423,8 @@ simple-io: context [
 							SysFreeString as byte-ptr! buf-ptr
 						]
 					]
-					if all [method = HTTP_POST bstr-d <> null][SysFreeString bstr-d]
-					hr: http/ResponseBody IH/ptr body
+					if bstr-d <> null [SysFreeString bstr-d]
+					hr: http/ResponseBody IH/ptr :body
 				]
 
 				if hr >= 0 [				
@@ -1416,7 +1461,7 @@ simple-io: context [
 				res
 			]
 		]
-		MacOSX [
+		macOS [
 			#either OS-version > 10.7 [
 				#define CFNetwork.lib "/System/Library/Frameworks/CFNetwork.framework/CFNetwork"
 			][
@@ -1584,7 +1629,6 @@ simple-io: context [
 					path: CFURLCreateWithString 0 url 0
 					CFRelease url
 				]
-				objc_msgSend [nsstr sel_getUid "release"]
 				path
 			]
 
@@ -1692,16 +1736,28 @@ simple-io: context [
 					value		[red-value!]
 					tail		[red-value!]
 					s			[series!]
+					str1		[red-string! value]
 					bin			[red-binary!]
 					stream		[integer!]
 					response	[integer!]
 					blk			[red-block!]
+					post?		[logic!]
 			][
-				switch method [
-					HTTP_GET  [action: "GET"]
-					HTTP_PUT  [action: "PUT"]
-					HTTP_POST [action: "POST"]
-					default [--NOT_IMPLEMENTED--]
+				post?: yes
+				case [
+					method = words/get  [action: "GET" post?: no]
+					method = words/put  [action: "PUT"]
+					method = words/post [action: "POST"]
+					method = words/head [action: "HEAD" post?: no]
+					true [
+						len: -1
+						s: GET_BUFFER(symbols)
+						copy-cell s/offset + method - 1 as cell! str1
+						str1/header: TYPE_STRING
+						str1/head: 0
+						str1/cache: null
+						action: strupr unicode/to-utf8 str1 :len
+					]
 				]
 
 				body: 0
@@ -1716,7 +1772,7 @@ simple-io: context [
 
 				if zero? req [return as red-value! none-value]
 
-				if all [data <> null any [method = HTTP_POST method = HTTP_PUT]][
+				if all [data <> null post?][
 					datalen: -1
 					either TYPE_OF(data) = TYPE_STRING [
 						buf: as byte-ptr! unicode/to-utf8 as red-string! data :datalen
@@ -1724,8 +1780,10 @@ simple-io: context [
 						buf: binary/rs-head as red-binary! data
 						datalen: binary/rs-length? as red-binary! data
 					]
-					body: CFDataCreate 0 buf datalen
-					CFHTTPMessageSetBody req body
+					if datalen <> -1 [
+						body: CFDataCreate 0 buf datalen
+						CFHTTPMessageSetBody req body
+					]
 				]
 
 				stream: CFString("application/x-www-form-urlencoded; charset=utf-8")
@@ -1814,10 +1872,15 @@ simple-io: context [
 	
 			#define CURLOPT_URL				10002
 			#define CURLOPT_HTTPGET			80
+			#define CURLOPT_POST			47
+			#define CURLOPT_PUT				54
 			#define CURLOPT_POSTFIELDSIZE	60
 			#define CURLOPT_NOPROGRESS		43
+			#define CURLOPT_NOBODY			44
+			#define CURLOPT_UPLOAD			46
 			#define CURLOPT_FOLLOWLOCATION	52
 			#define CURLOPT_POSTFIELDS		10015
+			#define CURLOPT_CUSTOMREQUEST	10036
 			#define CURLOPT_WRITEDATA		10001
 			#define CURLOPT_HEADERDATA		10029
 			#define CURLOPT_HTTPHEADER		10023
@@ -1965,7 +2028,7 @@ simple-io: context [
 					curl	[integer!]
 					res		[integer!]
 					buf		[byte-ptr!]
-					action	[c-string!]
+					action	[integer!]
 					bin		[red-binary!]
 					value	[red-value!]
 					tail	[red-value!]
@@ -1974,12 +2037,14 @@ simple-io: context [
 					slist	[integer!]
 					mp		[red-hash!]
 					blk		[red-block!]
+					str1	[red-string! value]
+					act-str [c-string!]
 			][
-				switch method [
-					HTTP_GET  [action: "GET"]
-					;HTTP_PUT  [action: "PUT"]
-					HTTP_POST [action: "POST"]
-					default [--NOT_IMPLEMENTED--]
+				case [
+					method = words/get [action: CURLOPT_HTTPGET]
+					method = words/post [action: CURLOPT_POST]
+					method = words/head [action: CURLOPT_NOBODY]
+					true [action: CURLOPT_CUSTOMREQUEST]
 				]
 
 				curl_global_init CURL_GLOBAL_ALL
@@ -1992,9 +2057,21 @@ simple-io: context [
 				]
 
 				slist: 0
-				len: -1
 				bin: binary/make-at stack/push* 4096
-				
+
+				either action = CURLOPT_CUSTOMREQUEST [
+					len: -1
+					s: GET_BUFFER(symbols)
+					copy-cell s/offset + method - 1 as cell! str1
+					str1/header: TYPE_STRING
+					str1/head: 0
+					str1/cache: null
+					act-str: strupr unicode/to-utf8 str1 :len
+					curl_easy_setopt curl CURLOPT_CUSTOMREQUEST as-integer act-str
+				][
+					curl_easy_setopt curl action 1
+				]
+				len: -1
 				curl_easy_setopt curl CURLOPT_URL as-integer unicode/to-utf8 as red-string! url :len
 				curl_easy_setopt curl CURLOPT_NOPROGRESS 1
 				curl_easy_setopt curl CURLOPT_FOLLOWLOCATION 1
@@ -2028,22 +2105,17 @@ simple-io: context [
 					curl_easy_setopt curl CURLOPT_HTTPHEADER slist
 				]
 
-				case [
-					method = HTTP_GET [
-						curl_easy_setopt curl CURLOPT_HTTPGET 1
-					]
-					method = HTTP_POST [
-						if data <> null [
-							len: -1
-							either TYPE_OF(data) = TYPE_STRING [
-								buf: as byte-ptr! unicode/to-utf8 as red-string! data :len
-							][
-								buf: binary/rs-head as red-binary! data
-								len: binary/rs-length? as red-binary! data
-							]
-							curl_easy_setopt curl CURLOPT_POSTFIELDSIZE len
-							curl_easy_setopt curl CURLOPT_POSTFIELDS as-integer buf
+				if any [action = CURLOPT_POST action = CURLOPT_CUSTOMREQUEST] [
+					if data <> null [
+						len: -1
+						either TYPE_OF(data) = TYPE_STRING [
+							buf: as byte-ptr! unicode/to-utf8 as red-string! data :len
+						][
+							buf: binary/rs-head as red-binary! data
+							len: binary/rs-length? as red-binary! data
 						]
+						curl_easy_setopt curl CURLOPT_POSTFIELDSIZE len
+						curl_easy_setopt curl CURLOPT_POSTFIELDS as-integer buf
 					]
 				]
 				res: curl_easy_perform curl

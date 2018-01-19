@@ -37,6 +37,26 @@ size-text: function [
 	system/view/platform/size-text face text
 ]
 
+metrics?: function [
+	"Returns a pair! value in the type metrics for the argument face"
+	face [object!]			"Face object to query"
+	type [word!]			"Metrics type: 'paddings or 'margins"
+	/total					"Return the addition of metrics along an axis"
+		axis [word!]		"Axis to use for addition: 'x or 'y"
+][
+	res: select system/view/metrics/:type face/type
+	all [
+		face/options
+		type: face/options/class
+		res: find res type
+		res: next res
+	]
+	either total [
+		axis: any [select [x 1 y 2] axis 1]
+		res/:axis/x + res/:axis/y
+	][res]
+]
+
 set-flag: function [
 	face  [object!]
 	facet [word!]
@@ -133,7 +153,7 @@ on-face-deep-change*: function [owner word target action new index part state fo
 										pane: target
 										until [
 											pane: back pane
-											pane/1/enable?: yes
+											pane/1/enabled?: yes
 											unless system/view/auto-sync? [show pane/1]
 											any [head? pane find-flag? pane/1/flags 'modal]
 										]
@@ -214,7 +234,7 @@ on-face-deep-change*: function [owner word target action new index part state fo
 	]
 ]
 
-link-tabs-to-parent: function [face [object!] /init][
+link-tabs-to-parent: function [face [object!]][
 	if faces: face/pane [
 		visible?: face/visible?
 		forall faces [
@@ -222,7 +242,6 @@ link-tabs-to-parent: function [face [object!] /init][
 				faces/1/visible?: make logic! all [visible? face/selected = index? faces]
 			]
 			faces/1/parent: face
-			if init [show/with faces/1 face]
 		]
 	]
 ]
@@ -266,7 +285,7 @@ face!: object [				;-- keep in sync with facet! enum
 	color:		none
 	menu:		none
 	data:		none
-	enable?:	yes
+	enabled?:	yes
 	visible?:	yes
 	selected:	none
 	flags:		none
@@ -288,8 +307,8 @@ face!: object [				;-- keep in sync with facet! enum
 				"-- on-change event --" lf
 				tab "face :" type		lf
 				tab "word :" word		lf
-				tab "old  :" type? old	lf
-				tab "new  :" type? new
+				tab "old  :" type? :old	lf
+				tab "new  :" type? :new
 			]
 		]
 		if all [word <> 'state word <> 'extra][
@@ -301,11 +320,11 @@ face!: object [				;-- keep in sync with facet! enum
 				exit
 			]
 			if word = 'pane [
-				if all [type = 'window object? new new/type = 'window][
+				if all [type = 'window object? :new new/type = 'window][
 					cause-error 'script 'bad-window []
 				]
-				same-pane?: all [block? old block? new same? head old head new]
-				if all [not same-pane? block? old not empty? old][
+				same-pane?: all [block? :old block? :new same? head :old head :new]
+				if all [not same-pane? block? :old not empty? old][
 					modify old 'owned none				;-- stop object events
 					foreach f head old [
 						f/parent: none
@@ -314,12 +333,11 @@ face!: object [				;-- keep in sync with facet! enum
 						]
 					]
 				]
-				if type = 'tab-panel [link-tabs-to-parent/init self] ;-- panels need to be SHOWn before parent
 			]
-			if all [not same-pane? any [series? old object? old]][modify old 'owned none]
+			if all [not same-pane? any [series? :old object? :old]][modify old 'owned none]
 			
 			unless any [same-pane? find [font para edge actors extra] word][
-				if any [series? new object? new][modify new 'owned reduce [self word]]
+				if any [series? :new object? :new][modify new 'owned reduce [self word]]
 			]
 			if word = 'font  [link-sub-to-parent self 'font old new]
 			if word = 'para  [link-sub-to-parent self 'para old new]
@@ -520,6 +538,7 @@ system/view: context [
 		;scaling:		1x1
 		paddings:		make map! 32
 		margins:		make map! 32
+		def-heights:	make map! 32
 		misc:			make map! 32
 		colors:			make map! 10
 	]
@@ -635,16 +654,13 @@ do-events: function [
 	/local result
 ][
 	win: last system/view/screens/1/pane
-	win/state/4: not no-wait							;-- mark the window from which the event loop starts
+	unless win/state/4 [win/state/4: not no-wait]		;-- mark the window from which the event loop starts
 	set/any 'result system/view/platform/do-event-loop no-wait
 	:result
 ]
 
 do-safe: func [code [block!] /local result][
-	if error? set/any 'result try/all code [
-		print :result
-		result: none
-	]
+	if error? set/any 'result try/all code [print :result]
 	get/any 'result
 ]
 
@@ -666,6 +682,7 @@ show: function [
 	face [object! block!] "Face object to display"
 	/with				  "Link the face to a parent face"
 		parent [object!]  "Parent face to link to"
+	/force				  "For internal use only!"
 ][
 	if block? face [
 		foreach f face [
@@ -690,8 +707,9 @@ show: function [
 		new?: yes
 		
 		if face/type <> 'screen [
-			if all [not parent not object? face/parent face/type <> 'window][
-				cause-error 'script 'not-linked []
+			if all [not force face/type <> 'window][
+				unless parent [cause-error 'script 'not-linked []]
+				if all [object? face/parent face/parent/type <> 'tab-panel][face/parent: none]
 			]
 			if any [series? face/extra object? face/extra][
 				modify face/extra 'owned none			;@@ TBD: unflag object's fields (ownership)
@@ -701,10 +719,10 @@ show: function [
 			]
 			p: either with [parent/state/1][0]
 
-			#if config/OS = 'MacOSX [					;@@ remove this system specific code
+			#if config/OS = 'macOS [					;@@ remove this system specific code
 				if all [face/type = 'tab-panel face/pane][
 					link-tabs-to-parent face
-					foreach f face/pane [show f]
+					foreach f face/pane [show/force f]
 				]
 			]
 
@@ -729,7 +747,7 @@ show: function [
 					pane: system/view/screens/1/pane
 					if find-flag? face/flags 'modal [
 						foreach f head pane [
-							f/enable?: no
+							f/enabled?: no
 							unless system/view/auto-sync? [show f]
 						]
 					]
@@ -738,17 +756,15 @@ show: function [
 			]
 		]
 		face/state: reduce [obj 0 none false]
-		if all [object? face/actors in face/actors 'on-created][
-			do-safe [face/actors/on-created face none]	;@@ only called once
-		]
 	]
 
 	if face/pane [
 		foreach f face/pane [show/with f face]
 		system/view/platform/refresh-window face/state/1
 	]
-	;check-all-reactions face
-	
+	if all [new? object? face/actors in face/actors 'on-created][
+		do-safe [face/actors/on-created face none]		;@@ only called once
+	]
 	if all [new? face/type = 'window face/visible?][
 		system/view/platform/show-window obj
 	]
@@ -789,7 +805,7 @@ view: function [
 	if block? spec [spec: either tight [layout/tight spec][layout spec]]
 	if spec/type <> 'window [cause-error 'script 'not-window []]
 	if options [set spec make object! opts]
-	if flags [spec/flags: either spec/flags [unique union spec/flags flgs][flgs]]
+	if flags [spec/flags: either spec/flags [unique union to-block spec/flags to-block flgs][flgs]]
 	
 	unless spec/text   [spec/text: "Red: untitled"]
 	unless spec/offset [center-face spec]
@@ -807,6 +823,8 @@ view: function [
 center-face: function [
 	"Center a face inside its parent"
 	face [object!]		 "Face to center"
+	/x					 "Center horizontally only"
+	/y					 "Center vertically only"
 	/with				 "Provide a reference face for centering instead of parent face"
 		parent [object!] "Reference face"
 	return: [object!]	 "Returns the centered face"
@@ -819,7 +837,12 @@ center-face: function [
 		]
 	]
 	either parent [
-		face/offset: parent/size - face/size / 2
+		pos: parent/size - face/size / 2
+		case [
+			x	  [face/offset/x: pos/x]
+			y	  [face/offset/y: pos/y]
+			'else [face/offset: pos]
+		]
 		if face/type = 'window [face/offset: face/offset + parent/offset]
 	][
 		print "CENTER-FACE: face has no parent!"		;-- temporary check
@@ -833,7 +856,8 @@ dump-face: function [
 ][
 	depth: ""
 	print [
-		depth "Style:" face/type "Offset:" face/offset "Size:" face/size
+		depth "Type:" face/type "Style:" if face/options [face/options/style]
+		"Offset:" face/offset "Size:" face/size
 		"Text:" if face/text [mold/part face/text 20]
 	]
 	append depth "    "
@@ -862,7 +886,7 @@ insert-event-func: function [
 	"Add a function to monitor global events. Return the function"
 	fun [block! function!] "A function or a function body block"
 ][
-	if block? :fun [fun: do [function [face event] fun]]	;@@ compiler chokes on 'function call
+	if block? :fun [fun: do [function copy [face event] fun]]	;@@ compiler chokes on 'function call
 	insert system/view/handlers :fun
 	:fun
 ]
@@ -1026,8 +1050,11 @@ insert-event-func [
 	all [
 		event/type = 'key
 		find "^M^/" event/key
-		find [field drop-down] event/face/type
-		event/type: 'enter
+		switch event/face/type [ 
+			field 
+			drop-down [event/type: 'enter]
+			button	  [event/type: 'click]
+		]
 	]
 	event
 ]
@@ -1065,6 +1092,12 @@ insert-event-func [
 		][none]
 		
 		if facet [system/reactivity/check/only face facet]
+	]
+	if event/face/type = 'window [
+		switch event/type [
+			move moving 	[system/reactivity/check/only event/face 'offset]
+			resize resizing [system/reactivity/check/only event/face 'size]
+		]
 	]
 	none
 ]

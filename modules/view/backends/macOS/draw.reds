@@ -1,5 +1,5 @@
 Red/System [
-	Title:	"OSX Draw dialect backend"
+	Title:	"macOS Draw dialect backend"
 	Author: "Qingtian Xie"
 	File: 	%draw.reds
 	Tabs: 	4
@@ -22,6 +22,8 @@ edges: as CGPoint! allocate max-edges * (size? CGPoint!)	;-- polygone edges buff
 colors: as pointer! [float32!] allocate 5 * max-colors * (size? float32!)
 colors-pos: colors + (4 * max-colors)
 
+draw-state!: alias struct! [unused [integer!]]
+
 draw-begin: func [
 	ctx			[draw-ctx!]
 	CGCtx		[handle!]
@@ -38,12 +40,13 @@ draw-begin: func [
 	unless pattern? [
 		CGContextSaveGState CGCtx
 
-		if on-graphic? [							;-- draw on image!, flip the CTM
+		either on-graphic? [							;-- draw on image!, flip the CTM
 			rc: as NSRect! img
 			CGContextTranslateCTM CGCtx as float32! 0.0 rc/y
 			CGContextScaleCTM CGCtx as float32! 1.0 as float32! -1.0
+		][
+			CGContextTranslateCTM CGCtx as float32! 0.5 as float32! 0.5
 		]
-		CGContextTranslateCTM CGCtx as float32! 0.5 as float32! 0.5
 	]
 
 	ctx/raw:			CGCtx
@@ -58,10 +61,11 @@ draw-begin: func [
 	ctx/pen-color:		0						;-- default: black
 	ctx/pen-join:		miter
 	ctx/pen-cap:		flat
-	ctx/brush-color:	0
+	ctx/brush-color:	-1
 	ctx/grad-pen:		-1
 	ctx/pen?:			yes
 	ctx/brush?:			no
+	ctx/grad-pos?:		no
 	ctx/colorspace:		CGColorSpaceCreateDeviceRGB
 	ctx/last-pt-x:		as float32! 0.0
 	ctx/last-pt-y:		as float32! 0.0
@@ -85,7 +89,7 @@ draw-end: func [
 	cache?		[logic!]
 	pattern?	[logic!]
 ][
-	if dc/font-attrs <> 0 [objc_msgSend [dc/font-attrs sel_getUid "release"]]
+	if dc/font-attrs <> 0 [objc_msgSend [dc/font-attrs sel_release]]
 	CGColorSpaceRelease dc/colorspace
 	unless pattern? [
 		CGContextRestoreGState CGCtx
@@ -149,6 +153,25 @@ CG-set-color: func [
 	]
 ]
 
+_set-font-color: func [
+	dc		[draw-ctx!]
+	color	[integer!]
+	/local
+		clr [integer!]
+][
+	if 2 >= objc_msgSend [dc/font-attrs sel_getUid "count"][
+		clr: rs-to-NSColor color
+		objc_msgSend [dc/font-attrs sel_release]
+		dc/font-attrs: objc_msgSend [				;-- default font attributes
+			objc_msgSend [objc_getClass "NSDictionary" sel_getUid "alloc"]
+			sel_getUid "initWithObjectsAndKeys:"
+			default-font NSFontAttributeName
+			clr NSForegroundColorAttributeName
+			0
+		]
+	]
+]
+
 OS-draw-pen: func [
 	dc	   [draw-ctx!]
 	color  [integer!]									;-- aabbggrr format
@@ -159,6 +182,7 @@ OS-draw-pen: func [
 	if all [not off? dc/pen-color <> color][
 		dc/pen-color: color
 		CG-set-color dc/raw color no
+		_set-font-color dc color
 	]
 ]
 
@@ -189,6 +213,7 @@ OS-draw-line-width: func [
 		width-v	[float32!]
 ][
 	width-v: get-float32 as red-integer! width
+	if width-v <= F32_0 [width-v: F32_1]
 	if dc/pen-width <> width-v [
 		dc/pen-width: width-v
 		CGContextSetLineWidth dc/raw width-v
@@ -618,7 +643,7 @@ OS-draw-font: func [
 	dc		[draw-ctx!]
 	font	[red-object!]
 ][
-	objc_msgSend [dc/font-attrs sel_getUid "release"]
+	objc_msgSend [dc/font-attrs sel_release]
 	dc/font-attrs: make-font-attrs font as red-object! none-value -1
 ]
 
@@ -704,6 +729,7 @@ OS-draw-text: func [
 	][
 		draw-text-box ctx pos as red-object! text catch?
 	]
+	CG-set-color ctx dc/pen-color no				;-- drawing text will change pen color, so reset it
 	CG-set-color ctx dc/brush-color yes				;-- drawing text will change brush color, so reset it
 ]
 
@@ -744,8 +770,8 @@ _draw-arc: func [
 			alpha: alpha - (pi32 * as float32! 2.0)
 		]
 	]
-	delta: beta - alpha / 2.0
-	bcp: as float32! (4.0 / 3.0 * (1.0 - cosf delta) / sinf delta)
+	delta: beta - alpha / as float32! 2.0
+	bcp: as float32! (4.0 / 3.0 * (1.0 - cos as float! delta) / sin as float! delta)
 
 	sin-a: sinf alpha
 	sin-b: sinf beta
@@ -806,7 +832,8 @@ OS-draw-arc: func [
 	angle-begin: rad * as float32! begin/value
 	angle: begin + 1
 	sweep: angle/value
-	angle-end: rad * as float32! (begin/value + sweep)
+	i: begin/value + sweep
+	angle-end: rad * as float32! i
 
 	closed?: angle < end
 
@@ -831,7 +858,7 @@ OS-draw-arc: func [
 				i = 4
 			]
 		][
-			CGContextAddArc ctx cx cy rad-x angle-begin angle-end 0
+			CGContextAddArc ctx cx cy rad-x angle-begin angle-end as-integer sweep < 0
 		]
 	]
 	either closed? [
@@ -991,7 +1018,6 @@ OS-draw-image: func [
 			as float32! crop1/y
 			w
 			h
-		CGImageRelease img
 		img: sub-img
 	]
 
@@ -1010,22 +1036,20 @@ fill-gradient-region: func [
 	CGContextSaveGState ctx
 	CGContextClip ctx
 
-	;pt1/x: dc/grad-x1
-	;pt1/y: dc/grad-y1
-	;pt1: CGPointApplyAffineTransform pt1 dc/matrix
-	;pt2/x: dc/grad-x2
-	;pt2/y: dc/grad-y2
-	;pt2: CGPointApplyAffineTransform pt2 dc/matrix
-	CGContextConcatCTM dc/raw dc/matrix
-
 	either dc/grad-type = linear [
+		pt1/x: dc/grad-x1
+		pt1/y: dc/grad-y1
+		pt1: CGPointApplyAffineTransform pt1 dc/matrix
+		pt2/x: dc/grad-x2
+		pt2/y: dc/grad-y2
+		pt2: CGPointApplyAffineTransform pt2 dc/matrix
 		CGContextDrawLinearGradient
 			ctx
 			dc/grad-pen
-			;pt1/x pt1/y pt2/x pt2/y
-			dc/grad-x1 dc/grad-y1 dc/grad-x2 dc/grad-y2
+			pt1/x pt1/y pt2/x pt2/y
 			3
 	][
+		CGContextConcatCTM dc/raw dc/matrix
 		CGContextDrawRadialGradient
 			ctx
 			dc/grad-pen
@@ -1061,24 +1085,36 @@ OS-draw-grad-pen-old: func [
 		n		[integer!]
 		delta	[float32!]
 		p		[float32!]
+		angle	[float32!]
+		sx		[float32!]
+		sy		[float32!]
+		rotate? [logic!]
+		scale?	[logic!]
 ][
+	dc/matrix: CGAffineTransformMake F32_1 F32_0 F32_0 F32_1 F32_0 F32_0
 	dc/grad-type: type
 	dc/grad-spread: spread
 	dc/grad-x1: as float32! offset/x			;-- save gradient offset for later use
 	dc/grad-y1: as float32! offset/y
 
 	int: as red-integer! offset + 1
-	dc/grad-x2: as float32! int/value
+	sx: as float32! int/value
 	int: int + 1
-	dc/grad-y2: as float32! int/value
+	sy: as float32! int/value
 
-	if type = radial [
-		dc/grad-radius: dc/grad-y2 - dc/grad-x2
+	dc/grad-y2: dc/grad-y1
+	either type = linear [
+		dc/grad-x2: dc/grad-x1 + sy
+		dc/grad-x1: dc/grad-x1 + sx
+	][
+		dc/grad-radius: sy - sx
 		dc/grad-x2: dc/grad-x1
-		dc/grad-y2: dc/grad-y1
 	]
 
 	n: 0
+	rotate?: no
+	scale?: no
+	sy: as float32! 1.0
 	while [
 		int: int + 1
 		n < 3
@@ -1089,11 +1125,18 @@ OS-draw-grad-pen-old: func [
 			default			[break]
 		]
 		switch n [
-			0	[if p <> as float32! 0.0 [dc/grad-angle: p dc/grad-rotate?: yes]]
-			1	[if p <> as float32! 1.0 [dc/grad-sx: p dc/grad-scale?: yes]]
-			2	[if p <> as float32! 1.0 [dc/grad-sy: p dc/grad-scale?: yes]]
+			0	[if p <> F32_0 [angle: p rotate?: yes]]
+			1	[if p <> F32_1 [sx: p scale?: yes]]
+			2	[if p <> F32_1 [sy: p scale?: yes]]
 		]
 		n: n + 1
+	]
+	if rotate? [
+		p: (as float32! PI) / (as float32! 180.0)
+		dc/matrix: CGAffineTransformRotate dc/matrix p * angle
+	]
+	if scale? [
+		dc/matrix: CGAffineTransformScale dc/matrix sx sy
 	]
 
 	color: colors + 4
@@ -1333,11 +1376,11 @@ OS-matrix-transform: func [
 	_OS-matrix-translate dc/raw translate/x translate/y
 ]
 
-OS-matrix-push: func [dc [draw-ctx!] state [int-ptr!]][
+OS-matrix-push: func [dc [draw-ctx!] state [draw-state!]][
 	CGContextSaveGState dc/raw
 ]
 
-OS-matrix-pop: func [dc [draw-ctx!] state [integer!]][
+OS-matrix-pop: func [dc [draw-ctx!] state [draw-state!]][
 	CGContextRestoreGState dc/raw
 	dc/pen-color:		0
 	dc/brush-color:		0
@@ -1411,21 +1454,28 @@ OS-set-clip: func [
 		rc	[NSRect!]
 ][
 	ctx: dc/raw
-	if upper/x > lower/x [t: upper/x upper/x: lower/x lower/x: t]
-	if upper/y > lower/y [t: upper/y upper/y: lower/y lower/y: t]
+	either rect? [
+		if upper/x > lower/x [t: upper/x upper/x: lower/x lower/x: t]
+		if upper/y > lower/y [t: upper/y upper/y: lower/y lower/y: t]
 
-	p1: 0
-	rc: as NSRect! :p1
-	x1: upper/x
-	y1: upper/y
-	x2: lower/x
-	y2: lower/y
-	rc/x: as float32! x1
-	rc/y: as float32! y1
-	rc/w: as float32! x2 - x1
-	rc/h: as float32! y2 - y1
-	;CGContextBeginPath ctx
-	CGContextAddRect ctx rc/x rc/y rc/w rc/h
+		p1: 0
+		rc: as NSRect! :p1
+		x1: upper/x
+		y1: upper/y
+		x2: lower/x
+		y2: lower/y
+		rc/x: as float32! x1
+		rc/y: as float32! y1
+		rc/w: as float32! x2 - x1
+		rc/h: as float32! y2 - y1
+		;CGContextBeginPath ctx
+		CGContextAddRect ctx rc/x rc/y rc/w rc/h
+	][
+		t: dc/path
+		CGPathCloseSubpath t
+		CGContextAddPath ctx t
+		CGPathRelease t
+	]
 	CGContextClip ctx
 ]
 
@@ -1433,10 +1483,9 @@ OS-set-clip: func [
 
 OS-draw-shape-beginpath: func [
 	dc          [draw-ctx!]
-	/local
-		path    [integer!]
 ][
-	CGContextBeginPath dc/raw
+	dc/path: CGPathCreateMutable
+	CGPathMoveToPoint dc/path null F32_0 F32_0
 ]
 
 OS-draw-shape-endpath: func [
@@ -1444,10 +1493,13 @@ OS-draw-shape-endpath: func [
 	close?      [logic!]
 	return:     [logic!]
 	/local
-		alpha   [byte!]
+		path	[integer!]
 ][
-	if close? [CGContextClosePath dc/raw]
+	path: dc/path
+	if close? [CGPathCloseSubpath path]
+	CGContextAddPath dc/raw path
 	do-draw-path dc
+	CGPathRelease path
 	true
 ]
 
@@ -1456,11 +1508,9 @@ OS-draw-shape-moveto: func [
 	coord   [red-pair!]
 	rel?    [logic!]
 	/local
-		ctx [handle!]
-		x	[float32!]
-		y	[float32!]
+		x		[float32!]
+		y		[float32!]
 ][
-	ctx: dc/raw
 	x: as float32! coord/x
 	y: as float32! coord/y
 	if rel? [
@@ -1470,7 +1520,7 @@ OS-draw-shape-moveto: func [
 	dc/last-pt-x: x
 	dc/last-pt-y: y
 	dc/shape-curve?: no
-	CGContextMoveToPoint ctx x y
+	CGPathMoveToPoint dc/path null x y
 ]
 
 OS-draw-shape-line: func [
@@ -1479,13 +1529,13 @@ OS-draw-shape-line: func [
 	end         [red-pair!]
 	rel?        [logic!]
 	/local
-		ctx		[handle!]
+		path	[integer!]
 		dx		[float32!]
 		dy		[float32!]
 		x		[float32!]
 		y		[float32!]
 ][
-	ctx: dc/raw
+	path: dc/path
 	dx: dc/last-pt-x
 	dy: dc/last-pt-y
 
@@ -1498,7 +1548,7 @@ OS-draw-shape-line: func [
 			dx: x
 			dy: y
 		]
-		CGContextAddLineToPoint ctx x y
+		CGPathAddLineToPoint path null x y
 		start: start + 1
 		start > end
 	]
@@ -1523,7 +1573,7 @@ OS-draw-shape-axis: func [
 		dc/last-pt-y: either rel? [dc/last-pt-y + len][len]
 	]
 	dc/shape-curve?: no
-	CGContextAddLineToPoint dc/raw dc/last-pt-x dc/last-pt-y
+	CGPathAddLineToPoint dc/path null dc/last-pt-x dc/last-pt-y
 ]
 
 draw-curve: func [
@@ -1582,13 +1632,13 @@ draw-curve: func [
 
 	dc/shape-curve?: yes
 	either num = 3 [				;-- cubic Bézier
-		CGContextAddCurveToPoint dc/raw p1x p1y p2x p2y p3x p3y
+		CGPathAddCurveToPoint dc/path null p1x p1y p2x p2y p3x p3y
 		dc/control-x: p2x
 		dc/control-y: p2y
 		dc/last-pt-x: p3x
 		dc/last-pt-y: p3y
 	][								;-- quadratic Bézier
-		CGContextAddQuadCurveToPoint dc/raw p1x p1y p2x p2y
+		CGPathAddQuadCurveToPoint dc/path null p1x p1y p2x p2y
 		dc/control-x: p1x
 		dc/control-y: p1y
 		dc/last-pt-x: p2x
@@ -1739,18 +1789,13 @@ OS-draw-shape-arc: func [
 	m: CGAffineTransformMakeTranslation center-x center-y
 	m: CGAffineTransformRotate m theta
 	m: CGAffineTransformScale m radius-x radius-y
-
-	path: CGPathCreateMutable
-	;CGPathMoveToPoint path null center-x center-y
-	CGPathAddRelativeArc path :m as float32! 0.0 as float32! 0.0 as float32! 1.0 cx angle-len
-	CGContextAddPath ctx/raw path
-	CGPathRelease path
+	CGPathAddRelativeArc ctx/path :m as float32! 0.0 as float32! 0.0 as float32! 1.0 cx angle-len
 ]
 
 OS-draw-shape-close: func [
 	ctx		[draw-ctx!]
 ][
-	CGContextClosePath ctx/raw
+	CGPathCloseSubpath ctx/path
 ]
 
 OS-draw-brush-bitmap: func [

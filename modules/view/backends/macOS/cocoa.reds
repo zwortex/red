@@ -167,7 +167,11 @@ Red/System [
 #define RedAllOverFlagKey		4000FFFCh
 #define RedAttachedWidgetKey	4000FFFDh
 #define RedCursorKey			4000FFFEh
+#define RedEnableKey			4000FFFFh
 
+#define QuitMsgData				12321
+
+#define OBJC_ALLOC(class) [objc_msgSend [objc_getClass class sel_alloc]]
 
 objc_super!: alias struct! [
 	receiver	[integer!]
@@ -213,7 +217,7 @@ RECT_STRUCT: alias struct! [
 
 tagPOINT: alias struct! [
 	x		[integer!]
-	y		[integer!]	
+	y		[integer!]
 ]
 
 tagSIZE: alias struct! [
@@ -313,6 +317,7 @@ tagSIZE: alias struct! [
 			return:		[integer!]
 		]
 		objc_msgSend: "objc_msgSend" [[variadic] return: [integer!]]
+		objc_msgSend_pt: "objc_msgSend" [[variadic] return: [CGPoint! value]]
 		objc_msgSendSuper: "objc_msgSendSuper" [[variadic] return: [integer!]]
 		objc_msgSend_f32: "objc_msgSend_fpret" [[variadic] return: [float32!]]
 		objc_msgSend_fpret: "objc_msgSend_fpret" [[variadic] return: [float!]]
@@ -415,6 +420,17 @@ tagSIZE: alias struct! [
 	"/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices" cdecl [
 		CGWindowLevelForKey: "CGWindowLevelForKey" [
 			key			[integer!]
+			return:		[integer!]
+		]
+		CGWindowListCreateImage: "CGWindowListCreateImage" [
+			;bounds		[NSRect! value]
+			x			[integer!]
+			y			[integer!]
+			w			[integer!]
+			h			[integer!]
+			listOption	[integer!]
+			windowID	[integer!]
+			imageOption [integer!]
 			return:		[integer!]
 		]
 		CTLineCreateWithAttributedString: "CTLineCreateWithAttributedString" [
@@ -760,7 +776,16 @@ tagSIZE: alias struct! [
 		CGPathRelease: "CGPathRelease" [
 			path		[integer!]
 		]
+		CGPathCloseSubpath: "CGPathCloseSubpath" [
+			path		[integer!]
+		]
 		CGPathMoveToPoint: "CGPathMoveToPoint" [
+			path		[integer!]
+			m			[CGAffineTransform!]
+			x			[float32!]
+			y			[float32!]
+		]
+		CGPathAddLineToPoint: "CGPathAddLineToPoint" [
 			path		[integer!]
 			m			[CGAffineTransform!]
 			x			[float32!]
@@ -774,6 +799,24 @@ tagSIZE: alias struct! [
 			radius		[float32!]
 			startAngle	[float32!]
 			delta		[float32!]
+		]
+		CGPathAddCurveToPoint: "CGPathAddCurveToPoint" [
+			path		[integer!]
+			m			[CGAffineTransform!]
+			cp1x		[float32!]
+			cp1y		[float32!]
+			cp2x		[float32!]
+			cp2y		[float32!]
+			x			[float32!]
+			y			[float32!]
+		]
+		CGPathAddQuadCurveToPoint: "CGPathAddQuadCurveToPoint" [
+			path		[integer!]
+			m			[CGAffineTransform!]
+			cp1x		[float32!]
+			cp1y		[float32!]
+			x			[float32!]
+			y			[float32!]
 		]
 		CGContextDrawImage: "CGContextDrawImage" [
 			ctx			[handle!]
@@ -818,13 +861,21 @@ objc_block_descriptor: declare struct! [
 	dispose_helper	[function! [src [int-ptr!]]]
 ]
 
+block_literal!: alias struct! [
+	isa			[integer!]
+	flags		[integer!]
+	reserved	[integer!]
+	invoke		[int-ptr!]
+	descriptor	[int-ptr!]
+	value		[int-ptr!]
+]
+
 get-super-obj: func [
 	id		[integer!]
 	return: [objc_super!]
 	/local
-		super [objc_super!]
+		super [objc_super! value]
 ][
-	super: declare objc_super!
 	super/receiver: id
 	super/superclass: objc_msgSend [id sel_getUid "superclass"]
 	super
@@ -835,9 +886,8 @@ msg-send-super-logic: func [
 	sel		[integer!]
 	return: [logic!]
 	/local
-		super [objc_super!]
+		super [objc_super! value]
 ][
-	super: declare objc_super!
 	super/receiver: id
 	super/superclass: objc_msgSend [id sel_getUid "superclass"]
 	as logic! objc_msgSendSuper [super sel]
@@ -849,12 +899,15 @@ msg-send-super: func [
 	arg		[integer!]
 	return: [integer!]
 	/local
-		super [objc_super!]
+		super [objc_super! value]
+		cls   [integer!]
 ][
-	super: declare objc_super!
-	super/receiver: id
-	super/superclass: objc_msgSend [id sel_getUid "superclass"]
-	objc_msgSendSuper [super sel arg]
+	cls: objc_msgSend [id sel_getUid "superclass"]
+	either cls = nsview-id [0][
+		super/receiver: id
+		super/superclass: cls
+		objc_msgSendSuper [super sel arg]
+	]
 ]
 
 to-red-string: func [

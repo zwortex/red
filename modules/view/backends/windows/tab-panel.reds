@@ -85,7 +85,12 @@ adjust-parent: func [									;-- prevent tabcontrol from having children
 	if tab-panel = symbol/resolve type/symbol [
 		SetParent hWnd GetParent parent
 		pos: as red-pair! values + FACE_OBJ_OFFSET
-		SetWindowPos hWnd null pos/x + x pos/y + y 0 0 SWP_NOSIZE or SWP_NOZORDER
+		SetWindowPos
+			hWnd
+			null
+			dpi-scale pos/x + x dpi-scale pos/y + y
+			0 0
+			SWP_NOSIZE or SWP_NOZORDER
 	]
 ]
 
@@ -256,11 +261,13 @@ set-tab: func [
 		if idx <= len [
 			obj: as red-object! panels + idx
 			if TYPE_OF(obj) = TYPE_OBJECT [
-				bool: as red-logic! get-node-facet obj/ctx FACE_OBJ_VISIBLE?
-				bool/value: true
-				hWnd: get-face-handle obj
-				show-tab hWnd SW_SHOW
-				BringWindowToTop hWnd
+				hWnd: face-handle? obj
+				if hWnd <> null [
+					bool: as red-logic! get-node-facet obj/ctx FACE_OBJ_VISIBLE?
+					bool/value: true
+					show-tab hWnd SW_SHOW
+					BringWindowToTop hWnd
+				]
 			]
 		]
 		if all [
@@ -273,7 +280,8 @@ set-tab: func [
 			if TYPE_OF(obj) = TYPE_OBJECT [
 				bool: as red-logic! get-node-facet obj/ctx FACE_OBJ_VISIBLE?
 				bool/value: false
-				show-tab get-face-handle obj SW_HIDE
+				hWnd: face-handle? obj
+				if hWnd <> null [show-tab hWnd SW_HIDE]
 			]
 		]
 	]

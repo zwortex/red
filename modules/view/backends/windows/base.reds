@@ -19,7 +19,7 @@ init-base-face: func [
 	values		[red-value!]
 	alpha?		[logic!]
 	/local
-		pt		[tagPOINT]
+		pt		[tagPOINT value]
 		offset	[red-pair!]
 		size	[red-pair!]
 		show?	[red-logic!]
@@ -40,11 +40,13 @@ init-base-face: func [
 	SetWindowLong handle wc-offset - 20 0
 	SetWindowLong handle wc-offset - 24 0
 	either alpha? [
-		pt: as tagPOINT (as int-ptr! offset) + 2
-		unless win8+? [
+		either win8+? [
+			pt/x: dpi-scale offset/x
+			pt/y: dpi-scale offset/y
+		][
 			pt: position-base handle as handle! parent offset
 		]
-		update-base handle as handle! parent pt values
+		update-base handle as handle! parent :pt values
 		if all [show?/value IsWindowVisible as handle! parent][
 			ShowWindow handle SW_SHOWNA
 		]
@@ -81,16 +83,15 @@ position-base: func [
 	base	[handle!]
 	parent	[handle!]
 	offset	[red-pair!]
-	return: [tagPOINT]
+	return: [tagPOINT value]
 	/local
-		pt	[tagPOINT]
+		pt	[tagPOINT value]
 ][
-	pt: declare tagPOINT
 	pt/x: offset/x
 	pt/y: offset/y
 	ClientToScreen parent pt		;-- convert client offset to screen offset
-	SetWindowLong base wc-offset - 4 pt/x
-	SetWindowLong base wc-offset - 8 pt/y
+	SetWindowLong base wc-offset - 4 dpi-scale pt/x
+	SetWindowLong base wc-offset - 8 dpi-scale pt/y
 	pt
 ]
 
@@ -143,7 +144,7 @@ render-base: func [
 	if all [
 		group-box <> type
 		window <> type
-		render-text values hDC :rc
+		render-text values hWnd hDC :rc
 	][
 		res: true
 	]
@@ -152,6 +153,7 @@ render-base: func [
 
 render-text: func [
 	values	[red-value!]
+	hWnd	[handle!]
 	hDC		[handle!]
 	rc		[RECT_STRUCT]
 	return: [logic!]
@@ -168,6 +170,7 @@ render-text: func [
 		res		[logic!]
 		len		[integer!]
 		str		[c-string!]
+		graphic	[integer!]
 ][
 	;unless winxp? [return render-text-d2d values hDC rc]
 	res: false
@@ -184,6 +187,14 @@ render-text: func [
 				TYPE_OF(color) = TYPE_TUPLE
 				color/array1 <> 0
 			][
+				if color/array1 >>> 24 > 0 [				;-- has alpha channel
+					graphic: 0
+					GdipCreateFromHDC hDC :graphic
+					GdipSetSmoothingMode graphic GDIPLUS_ANTIALIAS
+					update-base-text hWnd graphic hDC text font para rc/right - rc/left rc/bottom - rc/top
+					GdipDeleteGraphics graphic
+					return true
+				]
 				SetTextColor hDC color/array1 and 00FFFFFFh
 			]
 			state: as red-block! values + FONT_OBJ_STATE
@@ -261,16 +272,16 @@ process-layered-region: func [
 		face  [red-object!]
 		tail  [red-object!]
 ][
-	x: origin/x
-	y: origin/y
+	x: dpi-scale origin/x
+	y: dpi-scale origin/y
 	either null? rect [
 		rect: :rc
 		owner: as handle! GetWindowLong hWnd wc-offset - 16
 		assert owner <> null
 		GetClientRect owner rect
 	][
-		x: x + pos/x
-		y: y + pos/y
+		x: x + dpi-scale pos/x
+		y: y + dpi-scale pos/y
 	]
 
 	if layer? [
@@ -329,8 +340,9 @@ update-layered-window: func [
 		face	[red-object!]
 		tail	[red-object!]
 		size	[red-pair!]
-		pt		[tagPOINT]
-		rect	[RECT_STRUCT]
+		x		[integer!]
+		y		[integer!]
+		rect	[RECT_STRUCT value]
 		border	[integer!]
 		width	[integer!]
 		height	[integer!]
@@ -366,26 +378,25 @@ update-layered-window: func [
 		(WS_EX_LAYERED and GetWindowLong hWnd GWL_EXSTYLE) > 0
 	][
 		either offset <> null [
-			pt: declare tagPOINT
-			pt/x: offset/x + GetWindowLong hWnd wc-offset - 4
-			pt/y: offset/y + GetWindowLong hWnd wc-offset - 8
+			x: (dpi-scale offset/x) + GetWindowLong hWnd wc-offset - 4
+			y: (dpi-scale offset/y) + GetWindowLong hWnd wc-offset - 8
 			unless all [zero? offset/x zero? offset/y][
 				hdwp: DeferWindowPos
 					hdwp
 					hWnd
 					null
-					pt/x pt/y
+					x y
 					0 0
 					SWP_NOSIZE or SWP_NOZORDER or SWP_NOACTIVATE
-				SetWindowLong hWnd wc-offset - 4 pt/x
-				SetWindowLong hWnd wc-offset - 8 pt/y
+				SetWindowLong hWnd wc-offset - 4 x
+				SetWindowLong hWnd wc-offset - 8 y
 				hWnd: as handle! GetWindowLong hWnd wc-offset - 20
 				if hWnd <> null [
 					hdwp: DeferWindowPos
 						hdwp
 						hWnd
 						null
-						pt/x pt/y
+						x y
 						0 0
 						SWP_NOSIZE or SWP_NOZORDER or SWP_NOACTIVATE
 				]
@@ -395,17 +406,16 @@ update-layered-window: func [
 				winpos/flags and SWP_NOSIZE = 0				;-- sized
 				winpos/flags and 8000h = 0					;-- not maximize and minimize
 			][
-				rect: declare RECT_STRUCT
 				GetClientRect winpos/hWnd rect
 				border: winpos/cx - rect/right >> 1
 				size: as red-pair! values + FACE_OBJ_SIZE
 				width: size/x
 				height: size/y
-				if pt/x + size/x + border > (winpos/x + winpos/cx) [
-					width: size/x - (pt/x + size/x - (winpos/x + winpos/cx)) - border
+				if x + size/x + border > (winpos/x + winpos/cx) [
+					width: size/x - (x + size/x - (winpos/x + winpos/cx)) - border
 				]
-				if pt/y + size/y + border > (winpos/y + winpos/cy) [
-					height: size/y - (pt/y + size/y - (winpos/y + winpos/cy)) - border
+				if y + size/y + border > (winpos/y + winpos/cy) [
+					height: size/y - (y + size/y - (winpos/y + winpos/cy)) - border
 				]
 
 				clip-layered-window hWnd size 0 0 width height
@@ -475,6 +485,7 @@ BaseWndProc: func [
 		WM_MOUSEACTIVATE [
 			flags: GetWindowLong hWnd GWL_EXSTYLE
 			if flags and WS_EX_LAYERED > 0 [
+				SetForegroundWindow GetParent hWnd
 				return 3							;-- do not make it activated when click it
 			]
 		]
@@ -708,11 +719,11 @@ update-base: func [
 		font	[red-object!]
 		para	[red-object!]
 		sz		[red-pair!]
-		width	[integer!]
 		height	[integer!]
+		width	[integer!]
+		size	[tagSIZE]
 		hBitmap [handle!]
 		hBackDC [handle!]
-		size	[tagSIZE]
 		ptSrc	[tagPOINT]
 		ftn		[integer!]
 		bf		[tagBLENDFUNCTION]
@@ -758,24 +769,24 @@ update-base: func [
 		exit
 	]
 
-	width: sz/x
-	height: sz/y
+	width: dpi-scale sz/x
+	height: dpi-scale sz/y
 	hBackDC: CreateCompatibleDC hScreen
 	hBitmap: CreateCompatibleBitmap hScreen width height
 	SelectObject hBackDC hBitmap
 	GdipCreateFromHDC hBackDC :graphic
-	GdipSetSmoothingMode graphic GDIPLUS_ANTIALIAS
 
 	if TYPE_OF(color) = TYPE_TUPLE [				;-- update background
 		alpha?: update-base-background graphic color width height
 	]
+	GdipSetSmoothingMode graphic GDIPLUS_ANTIALIAS
 	update-base-image graphic img width height
 	update-base-text hWnd graphic hBackDC text font para width height
 	do-draw null as red-image! graphic cmds yes no no yes
 
 	ptSrc/x: 0
 	ptSrc/y: 0
-	size: as tagSIZE (as int-ptr! sz) + 2
+	size: as tagSIZE :width
 	ftn: 0
 	bf: as tagBLENDFUNCTION :ftn
 	bf/BlendOp: as-byte 0

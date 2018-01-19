@@ -34,7 +34,7 @@ attempt: func [
 	]
 ]
 
-comment: func [value][]
+comment: func ['value][]
 
 quit: func [
 	"Stops evaluation and exits the program"
@@ -91,7 +91,7 @@ last:	func ["Returns the last value in a series"  s [series!]][pick back tail s 
 		bitset! binary! block! char! email! file! float! get-path! get-word! hash!
 		integer! issue! lit-path! lit-word! logic! map! none! pair! paren! path!
 		percent! refinement! set-path! set-word! string! tag! time! typeset! tuple!
-		unset! url! word! image!
+		unset! url! word! image! date!
 	]
 	test-list: union to-list [
 		handle! error! action! native! datatype! function! image! object! op! routine! vector!
@@ -173,7 +173,7 @@ repend: func [
 	value
 	/only "Appends a block value as a block"
 ][
-	head either only [
+	head either any [only not any-list? series][
 		insert/only tail series reduce :value
 	][
 		reduce/into :value tail series					;-- avoids wasting an intermediary block
@@ -181,11 +181,29 @@ repend: func [
 ]
 
 replace: function [
-	series [series!]
-	pattern
-	value
-	/all
+	"Replaces values in a series, in place"
+	series [series!] "The series to be modified"
+	pattern "Specific value or parse rule pattern to match"
+	value "New value, replaces pattern in the series"
+	/all  "Replace all occurrences, not just the first"
+	/deep "Replace pattern in all sub-lists as well"
 ][
+	if system/words/all [deep any-list? series][
+		pattern: to block! either word? p: pattern [to lit-word! pattern][pattern]
+		parse series rule: [
+			some [
+				s: pattern e: (
+					s: change/part s value e
+					unless all [return series]
+				) :s
+				| ahead any-list! into rule | skip
+			]
+		]
+		return series
+	]
+	if system/words/all [char? :pattern any-string? series][
+		pattern: form pattern
+	]
 	many?: any [
 		system/words/all [series? :pattern any-string? series]
 		binary? series
@@ -202,7 +220,7 @@ replace: function [
 			]
 		][
 			while [pos: find pos :pattern][
-				pos: change pos value
+				pos: insert remove pos value
 			]
 		]
 	][
@@ -279,6 +297,7 @@ parse-trace: func [
 		limit [integer!]
 	return: [logic! block!]
 ][
+	clear p-indent
 	either case [
 		parse/case/trace input rules :on-parse-event
 	][
@@ -313,7 +332,7 @@ load: function [
 	/into "Put results in out block, instead of creating a new block"
 		out [block!] "Target block for results"
 	/as   "Specify the type of data; use NONE to load as code"
-		type [word! none!] "E.g. json, html, jpeg, png, etc"
+		type [word! none!] "E.g. bmp, gif, jpeg, png"
 ][
 	if as [
 		if word? type [
@@ -321,7 +340,7 @@ load: function [
 				if url? source [source: read/binary source]
 				return do [codec/decode source]
 			][
-				return none
+				cause-error 'script 'invalid-refine-arg [/as type]
 			]
 		]
 	]
@@ -384,16 +403,14 @@ save: function [
 	/all    "TBD: Save in serialized format"
 	/length "Save the length of the script content in the header"
 	/as     "Specify the format of data; use NONE to save as plain text"
-		format [word! none!] "E.g. json, html, jpeg, png, redbin etc"
+		format [word! none!] "E.g. bmp, gif, jpeg, png"
 ][
 	dst: either any [file? where url? where][where][none]
-	either as [
-		if word? format [
-			either codec: select system/codecs format [
-				data: do [codec/encode value dst]
-				if same? data dst [exit]	;-- if encode returns dst back, means it already save value to dst
-			][exit]
-		]
+	either system/words/all [as  word? format] [				;-- Be aware of [all as] word shadowing
+		either codec: select system/codecs format [
+			data: do [codec/encode value dst]
+			if same? data dst [exit]	;-- if encode returns dst back, means it already save value to dst
+		][cause-error 'script 'invalid-refine-arg [/as format]] ;-- throw error if format is not supported
 	][
 		if length [header: true header-data: any [header-data copy []]]
 		if header [
@@ -459,13 +476,14 @@ cause-error: function [
 ]
 
 pad: func [
-	"Pad a string on right side with spaces"
-	str		[string!]		"String to pad"
+	"Pad a FORMed value on right side with spaces"
+	str						"Value to pad, FORM it if not a string"
 	n		[integer!]		"Total size (in characters) of the new string"
 	/left					"Pad the string on left side"
 	/with c	[char!]			"Pad with char"
 	return:	[string!]		"Modified input string at head"
 ][
+	unless string? str [str: form str]
 	head insert/dup
 		any [all [left str] tail str]
 		any [c #" "]
@@ -485,7 +503,7 @@ mod: func [
 ]
 
 modulo: func [
-	"{Wrapper for MOD that handles errors like REMAINDER. Negligible values (compared to A and B) are rounded to zero"
+	"Wrapper for MOD that handles errors like REMAINDER. Negligible values (compared to A and B) are rounded to zero"
 	a		[number! char! pair! tuple! vector! time!]
 	b		[number! char! pair! tuple! vector! time!]
 	return: [number! char! pair! tuple! vector! time!]
@@ -549,9 +567,11 @@ normalize-dir: function [
 	dir
 ]
 
-what-dir: func [/local path][
+what-dir: func [
 	"Returns the active directory path"
-	path: to-red-file get-current-dir
+	/local path
+][
+	path: copy system/options/path
 	unless dir? path [append path #"/"]
 	path
 ]
@@ -562,41 +582,6 @@ change-dir: function [
 ][
 	unless exists? dir: normalize-dir dir [cause-error 'access 'cannot-open [dir]]
 	system/options/path: dir
-]
-
-list-dir: function [
-	"Displays a list of files and directories from given folder or current one"
-	dir [any-type!]  "Folder to list"
-	/col			 "Forces the display in a given number of columns"
-		n [integer!] "Number of columns"
-][
-	unless value? 'dir [dir: %.]
-	
-	unless find [file! word! path!] type?/word :dir [
-		cause-error 'script 'expect-arg ['list-dir type? :dir 'dir]
-	]
-	list: read normalize-dir dir
-	limit: system/console/size/x - 13
-	max-sz: either n [
-		limit / n - n					;-- account for n extra spaces
-	][
-		n: max 1 limit / 22				;-- account for n extra spaces
-		22 - n
-	]
-
-	while [not tail? list][
-		loop n [
-			if max-sz <= length? name: list/1 [
-				name: append copy/part name max-sz - 4 "..."
-			]
-			prin tab
-			prin pad form name max-sz
-			prin " "
-			if tail? list: next list [exit]
-		]
-		prin lf
-	]
-	()
 ]
 
 make-dir: function [
@@ -839,13 +824,14 @@ path-thru: function [
 	unless so/thru-cache [make-dir/deep so/thru-cache: append copy so/cache %cache/]
 	
 	if pos: find/tail file: to-file url "//" [file: pos]
+	clear find pos charset "?#"
 	path: first split-path file: append copy so/thru-cache file
 	unless exists? path [make-dir/deep path]
 	file
 ]
 
 exists-thru?: function [
-	"Return strue if the remote file is present in the local disk cache"
+	"Returns true if the remote file is present in the local disk cache"
 	url [url! file!] "Remote file address"
 ][
 	exists? any [all [file? url url] path-thru url]
@@ -871,7 +857,7 @@ load-thru: function [
 	url [url!]	"Remote file address"
 	/update		"Force a cache update"
 	/as			"Specify the type of data; use NONE to load as code"
-		type [word! none!] "E.g. json, html, jpeg, png, etc"
+		type [word! none!] "E.g. bmp, gif, jpeg, png"
 ][
 	path: path-thru url
 	if all [not update exists? path][url: path]

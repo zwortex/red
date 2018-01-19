@@ -211,7 +211,7 @@ OS-image: context [
 		IMAGE_HEIGHT(inode/size)
 	]
 
-	lock-bitmap: func [						;-- do nothing on Quartz backend
+	lock-bitmap: func [
 		img			[red-image!]
 		write?		[logic!]
 		return:		[integer!]
@@ -245,20 +245,24 @@ OS-image: context [
 	]
 
 	get-pixel: func [
-		bitmap		[integer!]
+		bitmap		[node!]
 		index		[integer!]				;-- zero-based
 		return:		[integer!]
 		/local
 			node	[img-node!]
 			buf		[int-ptr!]
 	][
-		node: as img-node! bitmap
+		node: as img-node! (as series! bitmap/value) + 1
+		if zero? node/flags [
+			node/flags: IMG_NODE_HAS_BUFFER
+			node/buffer: OS-image/data-to-image node/handle yes yes
+		]
 		buf: node/buffer + index
 		buf/value
 	]
 
 	set-pixel: func [
-		bitmap		[integer!]
+		bitmap		[node!]
 		index		[integer!]				;-- zero-based
 		color		[integer!]
 		return:		[integer!]
@@ -266,7 +270,11 @@ OS-image: context [
 			node	[img-node!]
 			buf		[int-ptr!]
 	][
-		node: as img-node! bitmap
+		node: as img-node! (as series! bitmap/value) + 1
+		if zero? node/flags [
+			node/flags: IMG_NODE_HAS_BUFFER
+			node/buffer: OS-image/data-to-image node/handle yes yes
+		]
 		node/flags: node/flags or IMG_NODE_MODIFIED
 		buf: node/buffer + index
 		buf/value: color
@@ -471,6 +479,13 @@ OS-image: context [
 		make-node h null 0 CGImageGetWidth h CGImageGetHeight h
 	]
 
+	load-cgimage: func [
+		h		[int-ptr!]
+		return:	[node!]
+	][
+		make-node h null 0 CGImageGetWidth h CGImageGetHeight h
+	]
+
 	load-image: func [			;-- load image from external resource: file!
 		src			[red-string!]
 		return:		[node!]
@@ -669,28 +684,11 @@ OS-image: context [
 		part?	[logic!]
 		return: [red-image!]
 		/local
-			x		[integer!]
-			y		[integer!]
-			w		[integer!]
-			h		[integer!]
-			offset	[integer!]
-			handle	[integer!]
-			width	[integer!]
-			height	[integer!]
-			bmp		[integer!]
-			format	[integer!]
+			inode	[img-node!]
 	][
-		width: IMAGE_WIDTH(src/size)
-		height: IMAGE_WIDTH(src/size)
-		offset: src/head
-		x: offset % width
-		y: offset / width
-		handle: as-integer src/node
-		bmp: 0
-
-		dst/header: TYPE_IMAGE
-		dst/head: 0
-		dst/node: as node! bmp
+		copy-cell as red-value! src as red-value! dst
+		inode: as img-node! (as series! dst/node/value) + 1
+		inode/flags: IMG_NODE_MODIFIED
 		dst
 	]
 ]

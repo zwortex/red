@@ -34,6 +34,12 @@ set-type: func [										;@@ convert to macro?
 	cell/header: cell/header and type-mask or type
 ]
 
+clear-newline: func [
+	cell [red-value!]
+][
+	cell/header: cell/header and flag-nl-mask
+]
+
 alloc-at-tail: func [
 	blk		[red-block!]
 	return: [cell!]
@@ -462,6 +468,7 @@ words: context [
 	opt:			-1
 	not*:			-1
 	quote:			-1
+	case*:			-1
 	reject:			-1
 	set:			-1
 	skip:			-1
@@ -519,9 +526,21 @@ words: context [
 	alpha:			-1
 	argb:			-1
 	
+	date:			-1
+	year:			-1
+	month:			-1
+	day:			-1
+	zone:			-1
+	week:			-1
+	isoweek:		-1
+	weekday:		-1
+	yearday:		-1
+	julian:			-1
+	time:			-1
 	hour:			-1
 	minute:			-1
 	second:			-1
+	timezone:		-1
 	
 	user:			-1
 	host:			-1
@@ -545,6 +564,7 @@ words: context [
 	_body:			as red-word! 0
 	_end:			as red-word! 0
 	_not-found:		as red-word! 0
+	_add:			as red-word! 0
 	_subtract:		as red-word! 0
 	_divide:		as red-word! 0
 	
@@ -568,6 +588,7 @@ words: context [
 	_quote: 		as red-word! 0
 	_collect: 		as red-word! 0
 	_set: 			as red-word! 0
+	_case:			as red-word! 0
 	
 	;-- modifying actions
 	_change:		as red-word! 0
@@ -655,6 +676,7 @@ words: context [
 		opt:			symbol/make "opt"
 		not*:			symbol/make "not"
 		quote:			symbol/make "quote"
+		case*:			symbol/make "case"
 		reject:			symbol/make "reject"
 		set:			symbol/make "set"
 		skip:			symbol/make "skip"
@@ -718,9 +740,21 @@ words: context [
 		alpha:			symbol/make "alpha"
 		argb:			symbol/make "argb"
 		
+		date:			symbol/make "date"
+		year:			symbol/make "year"
+		month:			symbol/make "month"
+		day:			symbol/make "day"
+		zone:			symbol/make "zone"
+		isoweek:		symbol/make "isoweek"
+		week:			symbol/make "week"
+		weekday:		symbol/make "weekday"
+		yearday:		symbol/make "yearday"
+		julian:			symbol/make "julian"
+		time:			symbol/make "time"
 		hour:			symbol/make "hour"
 		minute:			symbol/make "minute"
 		second:			symbol/make "second"
+		timezone:		symbol/make "timezone"
 		
 		user:			symbol/make "user"
 		host:			symbol/make "host"
@@ -753,6 +787,7 @@ words: context [
 		_quote: 		_context/add-global quote
 		_collect: 		_context/add-global collect
 		_set: 			_context/add-global set
+		_case:			_context/add-global case*
 		
 		;-- modifying actions
 		_change:		word/load "change"
@@ -790,6 +825,7 @@ words: context [
 		_body:			word/load "<body>"				;-- internal usage
 		_not-found:		word/load "<not-found>"			;-- internal usage
 		_end:			_context/add-global end
+		_add:			word/load "add"
 		_subtract:		word/load "subtract"
 		_divide:		word/load "divide"
 		

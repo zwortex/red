@@ -21,7 +21,7 @@ system/view/VID: context [
 			#include %rules.red
 			#switch config/OS [
 				Windows [#include %backends/windows/rules.red]
-				MacOSX	[#include %backends/osx/rules.red]
+				macOS	[#include %backends/macOS/rules.red]
 			]
 		]
 		
@@ -33,6 +33,7 @@ system/view/VID: context [
 				OK-Cancel
 			]
 			macOS [
+				adjust-buttons
 				capitalize
 				Cancel-OK
 			]
@@ -73,16 +74,19 @@ system/view/VID: context [
 		]
 	]
 	
-	process-reactors: function [][		
-		foreach [f blk later?] reactors [
-			either f [
-				bind blk ctx: context [face: f]
-				either later? [react/later/with blk ctx][react/with blk ctx]
-			][
-				either later? [react/later blk][react blk]
+	process-reactors: function [/local res][
+		set 'res try/all [
+			foreach [f blk later?] reactors [
+				either f [
+					bind blk ctx: context [face: f]
+					either later? [react/later/with blk ctx][react/with blk ctx]
+				][
+					either later? [react/later blk][react blk]
+				]
 			]
 		]
-		clear reactors
+		clear reactors									;-- ensures clearing even if reaction fails
+		if error? :res [do res]
 	]
 	
 	calc-size: function [face [object!]][
@@ -117,17 +121,41 @@ system/view/VID: context [
 	]
 	
 	align-faces: function [pane [block!] dir [word!] align [word!] max-sz [integer!]][
-		if any [
-			empty? pane
-			all [dir = 'across align = 'top]
-			all [dir = 'below  align = 'left]
-		][exit]											;-- already aligned
+		if empty? pane [exit]
 
-		axis: pick [y x] dir = 'across
+		edge?: any [
+			all [dir = 'across align <> 'middle]
+			all [dir = 'below  align <> 'center]
+		]
+		top-left?: find [top left] align
+		axis:  pick [y x] dir = 'across
+		svmm: system/view/metrics/margins
+
 		foreach face pane [
-			offset: max-sz - face/size/:axis
-			if find [center middle] align [offset: to integer! round offset / 2.0]
-			face/offset/:axis: face/offset/:axis + offset
+			unless face/options/at-offset [				;-- exclude absolute-positioned faces
+				offset: either top-left? [0][max-sz - face/size/:axis]
+				mar: select system/view/metrics/margins face/type
+				if type: face/options/class [mar: select mar type]
+				if mar [
+					offset: offset + either dir = 'across [
+						switch align [
+							top	   [negate mar/2/x]
+							middle [to integer! round mar/2/x + mar/2/y / 2.0]
+							bottom [mar/2/y]
+						]
+					][
+						switch align [
+							left   [negate mar/1/x]
+							center [to integer! round mar/1/x + mar/1/y / 2.0]
+							right  [mar/1/y]
+						]
+					]
+				]
+				if offset <> 0 [
+					if find [center middle] align [offset: to integer! round offset / 2.0]
+					face/offset/:axis: face/offset/:axis + offset
+				]
+			]
 		]
 	]
 	
@@ -222,6 +250,7 @@ system/view/VID: context [
 		opt?: 	 yes
 		divides: none
 		calc-y?: no
+		do-with: none
 		
 		obj-spec!:	make typeset! [block! object!]
 		rate!:		make typeset! [integer! time!]
@@ -236,10 +265,10 @@ system/view/VID: context [
 			match?: parse spec [[
 				  ['left | 'center | 'right]	 (opt?: add-flag opts 'para 'align value)
 				| ['top  | 'middle | 'bottom]	 (opt?: add-flag opts 'para 'v-align value)
-				| ['bold | 'italic | 'underline] (opt?: add-flag opts 'font 'style value)
-				| 'extra	  (opts/extra: fetch-value spec: next spec)
+				| ['bold | 'italic | 'underline | 'strike] (opt?: add-flag opts 'font 'style value)
+				| 'extra	  (opts/extra: fetch-expr 'spec spec: back spec)
 				| 'data		  (opts/data: fetch-expr 'spec spec: back spec)
-				| 'draw		  (opts/draw: process-draw fetch-argument block! spec)
+				| 'draw		  (opts/draw: process-draw fetch-expr 'spec spec: back spec)
 				| 'font		  (opts/font: make any [opts/font font!] fetch-argument obj-spec! spec)
 				| 'para		  (opts/para: make any [opts/para para!] fetch-argument obj-spec! spec)
 				| 'wrap		  (opt?: add-flag opts 'para 'wrap? yes)
@@ -248,10 +277,11 @@ system/view/VID: context [
 				| 'font-name  (add-flag opts 'font 'name  fetch-argument string! spec)
 				| 'font-size  (add-flag opts 'font 'size  fetch-argument integer! spec)
 				| 'font-color (add-flag opts 'font 'color pre-load fetch-argument color! spec)
+				| 'options	  (add-option opts fetch-argument block! spec)
 				| 'loose	  (add-option opts [drag-on: 'down])
 				| 'all-over   (set-flag opts 'flags 'all-over)
 				| 'hidden	  (opts/visible?: no)
-				| 'disabled	  (opts/enable?: no)
+				| 'disabled	  (opts/enabled?: no)
 				| 'select	  (opts/selected: fetch-argument integer! spec)
 				| 'rate		  (opts/rate: fetch-argument rate! spec)
 				   opt [rate! 'now (opts/now?: yes spec: next spec)]
@@ -261,6 +291,7 @@ system/view/VID: context [
 				| 'hint	  	  (add-option opts compose [hint: (fetch-argument string! spec)])
 				| 'cursor	  (add-option opts compose [cursor: (pre-load fetch-argument cursor! spec)])
 				| 'init		  (opts/init: fetch-argument block! spec)
+				| 'with		  (do-with: fetch-argument block! spec)
 				| 'react	  (
 					if later?: spec/2 = 'later [spec: next spec]
 					repend reactors [face fetch-argument block! spec later?]
@@ -268,52 +299,66 @@ system/view/VID: context [
 				] to end
 			]
 			unless match? [
-				either all [word? value find/skip next system/view/evt-names value 2][
-					make-actor opts value spec/2 spec spec: next spec
-				][
-					opt?: switch/default type?/word value: pre-load value [
-						pair!	 [unless opts/size  [opts/size:  value]]
-						string!	 [unless opts/text  [opts/text:  value]]
-						percent! [unless opts/data  [opts/data:  value]]
-						image!	 [unless opts/image [opts/image: value]]
-						tuple!	 [
-							either opts/color [
-								add-flag opts 'font 'color value
-							][
-								opts/color: value
-							]
+				case [
+					all [
+						word? value 
+						any [
+							select css value
+							select system/view/VID/styles value
 						]
-						integer! [
-							unless opts/size [
-								either find [panel group-box] face/type [
-									divides: value
+					][
+						opt?: no
+					]
+					all [word? value find/skip next system/view/evt-names value 2][
+						make-actor opts value spec/2 spec spec: next spec
+					]
+					'else [
+						opt?: switch/default type?/word value: pre-load value [
+							pair!	 [unless opts/size  [opts/size:  value]]
+							string!	 [unless opts/text  [opts/text:  value]]
+							logic!
+							percent! [unless opts/data  [opts/data:  value]]
+							image!	 [unless opts/image [opts/image: value]]
+							tuple!	 [
+								either opts/color [
+									add-flag opts 'font 'color value
 								][
-									opts/size: as-pair value face/size/y
-									opts/size-x: value
+									opts/color: value
 								]
 							]
-						]
-						block!	 [
-							switch/default face/type [
-								panel	  [layout/parent/styles value face divides css]
-								group-box [layout/parent/styles value face divides css]
-								tab-panel [
-									face/pane: make block! (length? value) / 2
-									opts/data: extract value 2
-									max-sz: 0x0
-									foreach p extract next value 2 [
-										layout/parent/styles reduce ['panel copy p] face divides css
-										p: last face/pane
-										max-sz: max max-sz p/offset + p/size
+							integer! [
+								unless opts/size [
+									either find [panel group-box] face/type [
+										divides: value
+									][
+										opts/size: as-pair value face/size/y
+										opts/size-x: value
 									]
-									unless opts/size [opts/size: max-sz]
 								]
-							][make-actor opts style/default-actor value spec]
-							yes
-						]
-						get-word! [make-actor opts style/default-actor value spec]
-						char!	  [yes]
-					][no]
+							]
+							block!	 [
+								switch/default face/type [
+									panel	  [layout/parent/styles value face divides css]
+									group-box [layout/parent/styles value face divides css]
+									tab-panel [
+										unless parse value [some [string! block!]][throw-error spec]
+										face/pane: make block! (length? value) / 2
+										opts/data: extract value 2
+										max-sz: 0x0
+										foreach p extract next value 2 [
+											layout/parent/styles reduce ['panel copy p] face divides css
+											p: last face/pane
+											max-sz: max max-sz p/offset + p/size
+										]
+										unless opts/size [opts/size: max-sz]
+									]
+								][make-actor opts style/default-actor value spec]
+								yes
+							]
+							get-word! [make-actor opts style/default-actor value spec]
+							char!	  [yes]
+						][no]
+					]
 				]
 			]
 			any [not opt? tail? spec]
@@ -325,7 +370,13 @@ system/view/VID: context [
 			opts/size-x: style/template/size/x
 		]
 		user-size?: opts/size
-
+		
+		all [											;-- handle `image data`
+			face/type = 'base
+			image? opts/data
+			opts/image: opts/data
+			opts/data: none
+		]
 		if all [oi: opts/image any [opts/size-x not opts/size]][
 			opts/size: either opts/size-x [
 				x: either zero? oi/size/x [1][oi/size/x]
@@ -353,14 +404,17 @@ system/view/VID: context [
 		
 		set/some face opts								;-- merge default+styles and user options
 		
-		if block? face/actors [face/actors: make object! face/actors]
+		if block? face/actors [face/actors: context face/actors]
 
 		;-- size adjustments --
 		all [											;-- account for hard paddings
 			pad: select system/view/metrics/paddings face/type
 			pad: as-pair pad/1/x + pad/1/y pad/2/x + pad/2/y
 		]
-		if all [not user-size? any [opts/size-x not find words 'size]][
+		if all [
+			any [not user-size? all [user-size? opts/size-x]]
+			any [opts/size-x not find words 'size]
+		][
 			sz: any [face/size 0x0]
 			min-sz: either find containers face/type [sz][
 				(any [pad 0x0]) + any [
@@ -383,6 +437,7 @@ system/view/VID: context [
 			face/size: face/size + as-pair mar/1/x + mar/1/y mar/2/x + mar/2/y
 		]
 		if face/type = 'tab-panel [resize-child-panels face]
+		if do-with [do bind do-with face]
 		spec
 	]
 	
@@ -390,10 +445,16 @@ system/view/VID: context [
 		unless any [name block? body][throw-error spec]
 		unless obj/actors [obj/actors: make block! 4]
 		
+		spec: [face [object!] event [event! none!]]
+		if all [block? body body/1 = 'local block? body/2][
+			append spec: copy spec /local
+			append spec body/2
+		]
+		
 		append obj/actors load append form name #":"	;@@ to set-word!
 		append obj/actors either get-word? body [body][
 			reduce [
-				'func [face [object!] event [event! none!]]
+				'func spec
 				copy/deep body
 			]
 		]
@@ -422,7 +483,7 @@ system/view/VID: context [
 		pane-size:	  0x0								;-- panel's content dynamic size
 		direction: 	  'across
 		align:		  'top
-		begin:		  none
+		begin:		  tail list
 		size:		  none								;-- user-set panel's size
 		max-sz:		  0									;-- maximum width/height of current column/row
 		current:	  0									;-- layout's cursor position
@@ -432,7 +493,7 @@ system/view/VID: context [
 		top-left: bound: cursor: origin: spacing: pick [0x0 10x10] tight
 		
 		opts: object [
-			type: offset: size: size-x: text: color: enable?: visible?: selected: image: 
+			type: offset: size: size-x: text: color: enabled?: visible?: selected: image: 
 			rate: font: flags: options: para: data: extra: actors: draw: now?: init: none
 		]
 		if empty? opt-words: [][append opt-words words-of opts] ;-- static cache
@@ -445,7 +506,7 @@ system/view/VID: context [
 					'line (any [begin/1/offset 1x1]) + sz cursor + sz
 				]
 			]
-			if begin [align-faces begin direction align max-sz]
+			align-faces begin direction align max-sz
 			begin: tail list
 			
 			words: pick [[left center right][top middle bottom]] below?
@@ -473,6 +534,7 @@ system/view/VID: context [
 			focal-face: none
 			panel: make face! system/view/VID/styles/window/template  ;-- absolute path to avoid clashing with /styles
 		]
+		either block? panel/pane [list: panel/pane][panel/pane: list]
 		
 		any [
 			all [										;-- account for container's hard paddings
@@ -495,7 +557,13 @@ system/view/VID: context [
 						image! [panel/image: value]
 					]
 				]
-			][global?: no]
+			][
+				either all [word? spec/1 find/skip next system/view/evt-names spec/1 2][
+					make-actor panel spec/1 spec/2 spec spec: next spec
+				][
+					global?: no
+				]
+			]
 			
 			if global? [spec: next spec]
 		]
@@ -548,8 +616,11 @@ system/view/VID: context [
 					throw-error spec
 				]
 				if style/template/type = 'window [throw-error spec]
+				
 				face: make face! copy/deep style/template
+				if h: select system/view/metrics/def-heights face/type [face/size/y: h]
 				face/parent: panel
+				
 				spec: fetch-options face opts style spec local-styles to-logic styling?
 				if style/init [do bind style/init 'face]
 				
@@ -573,10 +644,19 @@ system/view/VID: context [
 					repend value [to-set-word 'styled styled]
 					styling?: off
 				][
+					blk: [style: _ vid-align: _ at-offset: #[none]]
+					blk/2: value
+					blk/4: align
+					add-option face new-line/all blk no
+				
 					;-- update cursor position --
 					either at-offset [
-						face/offset: at-offset
+						face/options/at-offset: face/offset: at-offset
 						at-offset: none
+						all [							;-- account for hard margins
+							mar: select system/view/metrics/margins face/type
+							face/offset: face/offset - as-pair mar/1/x mar/2/x
+						]
 					][
 						either all [					;-- grid layout
 							divide?: all [divides divides <= length? list]
@@ -597,10 +677,6 @@ system/view/VID: context [
 							face/offset/:axis: list/:index/offset/:axis
 						]
 					]
-					all [								;-- account for hard margins
-						mar: select system/view/metrics/margins face/type
-						face/offset: face/offset - as-pair mar/1/x mar/2/x
-					]
 					unless any [face/color panel/type = 'tab-panel][
 						face/color: system/view/metrics/colors/(face/type)
 					]
@@ -616,26 +692,27 @@ system/view/VID: context [
 		do re-align
 		process-reactors								;-- Needs to be after [set name face]
 		
-		either block? panel/pane [append panel/pane list][
-			unless only [panel/pane: list]
-		]
 		either size [panel/size: size][
 			if pane-size <> 0x0 [
 				if svmp [
 					pad2: as-pair svmp/1/y svmp/2/y		;-- bottom-right padding
-					origin: either top-left = pad [pad2][max top-left pad2]
+					origin: either top-left + pad = origin [top-left + pad2][max top-left pad2]
 				]
 				panel/size: pane-size + origin
 			]
 		]
-		if image: panel/image [panel/size: max panel/size image/size]
+		if all [not size image: panel/image][panel/size: max panel/size image/size]
 
 		if all [focal-face not parent][panel/selected: focal-face]
 		
 		if options [set/some panel make object! user-opts]
-		if flags [spec/flags: either spec/flags [unique union spec/flags flgs][flgs]]
+		if flags [panel/flags: either panel/flags [unique union to-block panel/flags to-block flgs][flgs]]
+		if block? panel/actors [panel/actors: context panel/actors]
 		
-		either only [list][
+		either only [
+			panel/pane: none
+			list
+		][
 			if panel/type = 'window [
 				panel/parent: system/view/screens/1
 				system/view/VID/GUI-rules/process panel

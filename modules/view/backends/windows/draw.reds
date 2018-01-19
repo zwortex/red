@@ -10,6 +10,8 @@ Red/System [
 	}
 ]
 
+xform: declare XFORM!
+
 #define	SHAPE_OTHER				0
 #define	SHAPE_CURVE				1
 #define	SHAPE_QCURVE			2
@@ -50,6 +52,17 @@ Red/System [
 	free word
 ]
 
+draw-state!: alias struct! [
+	gstate		[integer!]
+	pen-clr		[integer!]
+	brush-clr	[integer!]
+	pen-join	[integer!]
+	pen-cap		[integer!]
+	pen?		[logic!]
+	brush?		[logic!]
+	a-pen?		[logic!]
+	a-brush?	[logic!]
+]
 
 alloc-context: func [
 	ctx				[draw-ctx!]
@@ -149,6 +162,7 @@ update-gdiplus-modes: func [ctx [draw-ctx!] ][
 update-gdiplus-brush: func [ctx [draw-ctx!] /local handle [integer!]][
 	handle: 0
 	ctx/gp-brush-type: BRUSH_TYPE_NORMAL
+	ctx/other/gradient-fill?: false
 	unless zero? ctx/gp-brush [
 		GdipDeleteBrush ctx/gp-brush
 		ctx/gp-brush: 0
@@ -161,6 +175,7 @@ update-gdiplus-brush: func [ctx [draw-ctx!] /local handle [integer!]][
 
 update-gdiplus-pen: func [ctx [draw-ctx!] /local handle [integer!]][
 	ctx/gp-pen-type: BRUSH_TYPE_NORMAL
+	ctx/other/gradient-pen?: false
 	either ctx/pen? [
 		if ctx/gp-pen-saved <> 0 [
 			ctx/gp-pen: ctx/gp-pen-saved
@@ -264,13 +279,14 @@ draw-begin: func [
 	return: 	[draw-ctx!]
 	/local
 		dc		 [handle!]
-		rect	 [RECT_STRUCT]
+		rect	 [RECT_STRUCT value]
 		width	 [integer!]
 		height	 [integer!]
 		hBitmap  [handle!]
 		hBackDC  [handle!]
 		graphics [integer!]
 		ptrn	 [red-image!]
+		ratio	 [float32!]
 ][
 	zero-memory as byte-ptr! ctx size? draw-ctx!
 	alloc-context ctx
@@ -315,7 +331,6 @@ draw-begin: func [
 	ptrn:									as red-image! ctx/other/pattern-image-pen
 	ptrn/node:								null
 
-	rect: declare RECT_STRUCT
 	either null? hWnd [
 		ctx/on-image?: yes
 		either on-graphic? [
@@ -359,6 +374,14 @@ draw-begin: func [
 
 			graphics: 0
 			GdipCreateFromHDC dc :graphics
+			SelectObject dc GetStockObject NULL_BRUSH
+		]
+	]
+
+	if any [hWnd <> null on-graphic?][
+		if dpi-factor <> 100 [
+			ratio: (as float32! dpi-factor) / (as float32! 100.0)
+			GdipScaleWorldTransform graphics ratio ratio GDIPLUS_MATRIX_PREPEND
 		]
 	]
 
@@ -953,7 +976,6 @@ OS-draw-shape-arc: func [
 		center		[red-pair!]
 		m			[integer!]
 		path		[integer!]
-		xform		[XFORM!]
 		arc-dir		[integer!]
 		prev-dir	[integer!]
 		pt			[tagPOINT]
@@ -972,8 +994,8 @@ OS-draw-shape-arc: func [
 		radius-y: get-float item
 		item: item + 1
 		theta: get-float item
-		if radius-x < 0.0 [ radius-x: radius-x * -1]
-		if radius-y < 0.0 [ radius-x: radius-x * -1]
+		if radius-x < 0.0 [ radius-x: radius-x * -1.0]
+		if radius-y < 0.0 [ radius-x: radius-x * -1.0]
 
 		;-- calculate center
 		dx: (p1-x - p2-x) / 2.0
@@ -995,7 +1017,7 @@ OS-draw-shape-arc: func [
 		sqrt-val: ((rx2 * ry2) - (rx2 * Y1 * Y1) - (ry2 * X1 * X1)) / ((rx2 * Y1 * Y1) + (ry2 * X1 * X1))
 		cf: either sqrt-val < 0.0 [ 0.0 ][ sign * sqrt sqrt-val ]
 		cx: cf * (radius-x * Y1 / radius-y)
-		cy: cf * (radius-y * X1 / radius-x) * (-1)
+		cy: cf * (radius-y * X1 / radius-x) * -1.0
 		center-x: (cos-val * cx) - (sin-val * cy) + ((p1-x + p2-x) / 2.0)
 		center-y: (sin-val * cx) + (cos-val * cy) + ((p1-y + p2-y) / 2.0)
 
@@ -1005,13 +1027,10 @@ OS-draw-shape-arc: func [
 		angle-2: radian-to-degrees atan (float/abs ((p2-y - center-y) / (p2-x - center-x)))
 		angle-2: adjust-angle (p2-x - center-x) (p2-y - center-y) angle-2
 		angle-len: angle-2 - angle-1
-		sign: either angle-len >= 0.0 [ 1.0 ][ -1.0 ]
-		if large? [
-			either sign < 0.0 [
-				angle-len: 360.0 + angle-len
-			][
-				angle-len: angle-len - 360.0
-			]
+		either sweep? [
+			if angle-len < 0.0 [angle-len: 360.0 + angle-len]
+		][
+			if angle-len > 0.0 [angle-len: angle-len - 360.0]
 		]
 		angle-1: angle-1 - theta
 
@@ -1030,7 +1049,7 @@ OS-draw-shape-arc: func [
 			m: 0
 
 			GdipCreateMatrix :m
-			GdipTranslateMatrix m as float32! (center-x * -1) as float32! (center-y * -1) GDIPLUS_MATRIX_APPEND
+			GdipTranslateMatrix m as float32! (center-x * -1.0) as float32! (center-y * -1.0) GDIPLUS_MATRIX_APPEND
 			GdipRotateMatrix m as float32! theta GDIPLUS_MATRIX_APPEND
 			GdipTranslateMatrix m as float32! center-x as float32! center-y GDIPLUS_MATRIX_APPEND
 			GdipTransformPath path m
@@ -1056,10 +1075,9 @@ OS-draw-shape-arc: func [
 				arc-points/end-y: p2-y
 			]
 
-			xform: declare XFORM!
-			set-matrix xform 1.0 0.0 0.0 1.0 center-x * -1 center-y * -1
+			set-matrix xform 1.0 0.0 0.0 1.0 center-x * -1.0 center-y * -1.0
 			SetWorldTransform dc xform
-			set-matrix xform cos-val sin-val sin-val * -1 cos-val center-x center-y
+			set-matrix xform cos-val sin-val sin-val * -1.0 cos-val center-x center-y
 			ModifyWorldTransform dc xform MWT_RIGHTMULTIPLY
 
 			prev-dir: GetArcDirection dc
@@ -1101,7 +1119,10 @@ OS-draw-anti-alias: func [
 		GdipSetTextRenderingHint ctx/graphics TextRenderingHintAntiAliasGridFit
 	][
 		ctx/other/GDI+?: no
-		if ctx/on-image? [ctx/other/anti-alias?: yes ctx/other/GDI+?: yes]			;-- always use GDI+ to draw on image
+		if any [ctx/on-image? dpi-factor <> 100][	;-- always use GDI+ to draw on image
+			ctx/other/anti-alias?: yes
+			ctx/other/GDI+?: yes
+		]
 		GdipSetSmoothingMode ctx/graphics GDIPLUS_HIGHSPPED
 		GdipSetTextRenderingHint ctx/graphics TextRenderingHintSystemDefault
 	]
@@ -1577,18 +1598,19 @@ OS-draw-text: func [
 	][
 		tm: as tagTEXTMETRIC ctx/other/gradient-pen/colors
 		GetTextMetrics ctx/dc tm
-		y: pos/y
+		x: dpi-scale pos/x
+		y: dpi-scale pos/y
 		p: str
 		while [len > 0][
 			if all [p/1 = #"^/" p/2 = #"^@"][
-				ExtTextOut ctx/dc pos/x y ETO_CLIPPED null str (as-integer p - str) / 2 null
+				ExtTextOut ctx/dc x y ETO_CLIPPED null str (as-integer p - str) / 2 null
 				y: y + tm/tmHeight
 				str: p + 2
 			]
 			p: p + 2
 			len: len - 1
 		]
-		if p > str [ExtTextOut ctx/dc pos/x y ETO_CLIPPED null str (as-integer p - str) / 2 null]
+		if p > str [ExtTextOut ctx/dc x y ETO_CLIPPED null str (as-integer p - str) / 2 null]
 	]
 ]
 
@@ -2089,8 +2111,8 @@ OS-draw-brush-bitmap: func [
 	]
 	texture: 0
 	result: GdipCreateTexture2I as-integer img/node wrap x y width height :texture
-	ctx/brush?: brush?
 	either brush? [
+		ctx/brush?:         yes
 		ctx/gp-brush:       texture
 		ctx/gp-brush-type:  BRUSH_TYPE_TEXTURE
 	][
@@ -2949,6 +2971,7 @@ OS-draw-grad-pen-old: func [
 		GdipCreatePathGradientFromPath n :brush
 		GdipDeletePath n
 		GdipSetPathGradientCenterColor brush color/value
+		GdipSetPathGradientCenterPointI brush as tagPOINT :offset/x
 		reverse-int-array color count
 		n: count - 1
 		start: 2
@@ -3082,8 +3105,7 @@ OS-draw-grad-pen: func [
 		last-c/value: color/value
 		count: count + 1
 	]
-	ctx/brush?:       brush?
-	gradient: either ctx/brush? [ ctx/other/gradient-fill ][ ctx/other/gradient-pen ]
+	gradient: either brush? [ctx/brush?: yes ctx/other/gradient-fill ][ ctx/other/gradient-pen ]
 	gradient/count:     count
 	gradient/created?:  false
 	gradient/positions?: false
@@ -3360,13 +3382,27 @@ OS-matrix-transform: func [
 	]
 ]
 
-OS-matrix-push: func [ctx [draw-ctx!] state [int-ptr!] /local s][
+OS-matrix-push: func [ctx [draw-ctx!] state [draw-state!] /local s][
 	s: 0
 	GdipSaveGraphics ctx/graphics :s
-	state/value: s
+	state/gstate: s
+	state/pen-clr: ctx/pen-color
+	state/brush-clr: ctx/brush-color
+	state/pen-join: ctx/pen-join
+	state/pen-cap: ctx/pen-cap
+	state/pen?: ctx/pen?
+	state/brush?: ctx/brush?
+	state/a-pen?: ctx/alpha-pen?
+	state/a-brush?: ctx/alpha-brush?
 ]
 
-OS-matrix-pop: func [ctx [draw-ctx!] state [integer!]][GdipRestoreGraphics ctx/graphics state]
+OS-matrix-pop: func [ctx [draw-ctx!] state [draw-state!]][
+	GdipRestoreGraphics ctx/graphics state/gstate
+	ctx/pen-join: state/pen-join
+	ctx/pen-cap: state/pen-cap
+	OS-draw-pen ctx state/pen-clr not state/pen? state/a-pen?
+	OS-draw-fill-pen ctx state/brush-clr not state/brush? state/a-brush?
+]
 
 OS-matrix-reset: func [
 	ctx			[draw-ctx!]
