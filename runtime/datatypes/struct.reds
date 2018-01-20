@@ -368,6 +368,7 @@ _struct: context [
 				]
 			]
 			types/value: as-byte type
+			types: types + 1
 			value: value + 1
 		]
 		st
@@ -432,6 +433,7 @@ _struct: context [
 		return:	[red-value!]
 	][
 		#if debug? = yes [if verbose > 0 [print-line "struct/compare"]]
+		none-value
 	]
 	
 	;--- Navigation actions ---
